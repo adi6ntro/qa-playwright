@@ -17,10 +17,17 @@ reply read right, is a template actually approved by Meta, etc).
 
 - **Inbox** (`/customer/inbox`): conversation list, chat history, reply
   send, contact-info save — all live/wired.
-- **Marketing** (`/customer/marketing`): Templates tab (CRUD) and Contacts
-  tab — live/wired. **Campaigns and Segments tabs are UI-only stubs** right
-  now (their JS files aren't loaded by the page) — `03-marketing-campaigns-*`
-  exists specifically to *prove* they're still stubs, not to test sending.
+- **Marketing** (`/customer/marketing`): Templates tab (CRUD) and the
+  Contacts *list* — live/wired. **Campaigns and Segments are real, fully
+  loaded UI (multi-step wizard, scripted chat demo) that simply never calls
+  a backend** — `bulk-campaign.js`/`create-segment.js` ARE `<script>`-loaded
+  (each via its own modal partial), confirmed by reading them end to end;
+  they just contain zero `fetch`/`axios` calls. Segments' "Create" button
+  goes further: it has **no click handler at all**, not even a broken one.
+  Same story for Contacts' "+ Add Contact"/"Import CSV" modal — its own
+  submit functions are literally `{ closeAddContact(); }`. `03-marketing-
+  campaigns-*` exercises the real wizard/chat flows end to end and asserts
+  nothing gets sent/saved anywhere, rather than just checking a modal opens.
 - **"Add WhatsApp number" onboarding flow**: no route exists yet
   (`customer/my-clinic/wa-numbers`) — one test asserts it 404s, as a canary
   for when it gets wired up.

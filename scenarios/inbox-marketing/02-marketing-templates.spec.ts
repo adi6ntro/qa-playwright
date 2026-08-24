@@ -20,16 +20,25 @@ test.describe('Marketing — Templates', () => {
     await gotoMarketing(page, 'templates');
     await openCreateTemplate(page);
 
-    await page.locator('#crt-name').fill('QA Test Template 123!!');
-    await expect(page.locator('#crt-name')).toHaveValue('qa_test_template_123');
+    // Unique name+body every run: Meta rejects resubmitting the same
+    // name+content shortly after a prior create/delete of it (observed
+    // empirically as error_subcode 2388023 — "similar content" family — when
+    // this test reused a fixed literal name/body across repeated runs
+    // against the shared sandbox). A fixed name is also just bad hygiene
+    // for a test that runs against real, shared external state.
+    const unique = Date.now();
+    const rawName = `QA Test Template ${unique}!!`;
+    const expectedName = `qa_test_template_${unique}`;
+    await page.locator('#crt-name').fill(rawName);
+    await expect(page.locator('#crt-name')).toHaveValue(expectedName);
 
-    // Meta rejects templates where a variable opens/closes the body, or where
-    // variables are too dense relative to surrounding static text (error
-    // subcodes 2388299 / 2388293 respectively — confirmed empirically against
-    // the real sandbox, see checklist doc Section D note). Keep this body
-    // generously wrapped in static text so the test exercises the happy path,
-    // not Meta's template-quality rejection path.
-    const bodyText = 'Hi {{1}}, this is a friendly reminder that your appointment at our clinic is scheduled for {{2}}. Please arrive 10 minutes early. Thank you!';
+    // Meta also rejects templates where a variable opens/closes the body, or
+    // where variables are too dense relative to surrounding static text
+    // (error subcodes 2388299 / 2388293 respectively — confirmed empirically
+    // against the real sandbox, see checklist doc Section D note). Keep this
+    // body generously wrapped in static text so the test exercises the happy
+    // path, not Meta's template-quality rejection path.
+    const bodyText = `Hi {{1}}, this is a friendly reminder (ref ${unique}) that your appointment at our clinic is scheduled for {{2}}. Please arrive 10 minutes early. Thank you!`;
     await page.locator('#crt-body').fill(bodyText);
     await expect(page.locator('#crt-examples-wrap')).toBeVisible();
     await expect(page.locator('#crt-examples-inputs input')).toHaveCount(2);
@@ -42,6 +51,13 @@ test.describe('Marketing — Templates', () => {
     ]);
     expect(resp.ok()).toBeTruthy();
     await expect(page.locator('#modal-submitted-approval')).toHaveClass(/open/);
+
+    // Clean up — this suite shouldn't leave junk templates in the shared
+    // sandbox behind for other testers.
+    const csrf = await page.evaluate(() => (window as any).MKT_CONFIG?.csrf);
+    await page.request.delete(`/customer/marketing/templates/${encodeURIComponent(expectedName)}`, {
+      headers: { 'X-CSRF-TOKEN': csrf },
+    });
   });
 
   test('delete confirmation prompt appears before deleting', async ({ page }) => {
