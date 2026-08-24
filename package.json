@@ -1,0 +1,30 @@
+{
+  "name": "reporty-qa-playwright",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "login-setup": "playwright test auth/login-setup.ts --project=setup",
+
+    "test:inbox": "playwright test scenarios/inbox-marketing/01-inbox.spec.ts",
+    "test:marketing": "playwright test scenarios/inbox-marketing/02-marketing-templates.spec.ts",
+    "test:stubs": "playwright test scenarios/inbox-marketing/03-marketing-campaigns-segments-stub.spec.ts",
+    "test:inbox-marketing": "playwright test scenarios/inbox-marketing/",
+
+    "test:maha-a": "playwright test scenarios/maha-instructions/02-section-a-reads.spec.ts",
+    "test:maha-b": "playwright test scenarios/maha-instructions/03-section-b-instructions.spec.ts",
+    "test:maha-remaining": "playwright test scenarios/maha-instructions/04-remaining-tools.spec.ts",
+    "test:maha-mix": "playwright test scenarios/maha-instructions/05-mix-chat.spec.ts",
+    "test:maha-negative": "playwright test scenarios/maha-instructions/06-negative-tests.spec.ts",
+    "test:maha-all": "playwright test scenarios/maha-instructions/",
+    "cleanup:maha-bug005": "playwright test scenarios/maha-instructions/01-cleanup-leftover-markers.spec.ts",
+
+    "test:all": "playwright test scenarios/",
+    "report": "playwright show-report"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.47.0",
+    "@types/node": "^20.14.0",
+    "dotenv": "^16.4.5",
+    "typescript": "^5.5.0"
+  }
+}
