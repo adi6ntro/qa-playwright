@@ -206,17 +206,40 @@ export async function readMarkerText(page: Page, marker: string): Promise<string
   return row ? row.text : null;
 }
 
+/**
+ * Maha consistently wraps a proposed rule wording in Arabic guillemets — «...» —
+ * in every sample across the clinic 2886 sessions and every dev run so far. That
+ * quoted block is the actual draft, and comparing it turn-over-turn is the only
+ * way to tell a REAL supersede (a new draft, which is what makes expected_text
+ * drift) from a turn that merely re-explains the draft already pending.
+ */
+export function extractDraft(text: string): string | null {
+  const m = text.match(/«([\s\S]*?)»/);
+  return m ? m[1].replace(/\s+/g, ' ').trim() : null;
+}
+
 export interface DriftResult {
   /** One entry per un-confirmed re-draft turn, in order. */
-  proposals: { turn: number; text: string; wasProposal: boolean; saved: boolean }[];
+  proposals: {
+    turn: number;
+    text: string;
+    wasProposal: boolean;
+    saved: boolean;
+    draft: string | null;
+  }[];
+  /** Distinct drafts seen, in first-seen order. */
+  distinctDrafts: string[];
   /**
-   * True if at least 2 turns went by WITHOUT the rule actually being saved —
-   * which is the real precondition (the model accumulating unconfirmed drafts).
+   * True only when the model actually SUPERSEDED its own proposal at least once —
+   * i.e. 2+ materially different drafts, with no save in between.
    *
-   * Deliberately not "2+ turns that look like proposals": a turn can be a
-   * failure apology that still carries a fresh draft (observed on the first
-   * baseline run), and that counts toward the drift just as much as a clean
-   * "shall I save this?" does. What must NOT have happened is a real save.
+   * Tightened 2026-08-26 after a dev run passed on known-buggy code: all 3 drift
+   * turns were proposal-SHAPED, so the old "2+ turns without a save" check was
+   * satisfied, but Maha had simply re-explained the SAME pending proposal each
+   * time ("التعديل المقترح اللي بانتظار تأكيدك") without ever re-drafting. No
+   * supersede means expected_text never drifts, which means the bug cannot fire —
+   * so that run proved nothing, yet reported PASS. Proposal shape is not the
+   * precondition; a changed draft is.
    */
   driftAchieved: boolean;
 }
@@ -238,23 +261,41 @@ export async function driftUnconfirmedProposals(
   rounds: number
 ): Promise<DriftResult> {
   const proposals: DriftResult['proposals'] = [];
-  for (let turn = 1; turn <= rounds; turn++) {
+  const distinctDrafts: string[] = [];
+
+  // `rounds` is a FLOOR, not a cap: the loop keeps nudging until it has actually
+  // seen 2 distinct drafts (a real supersede), up to maxRounds. Whether Maha
+  // re-drafts or just re-explains the pending proposal is stochastic, so a fixed
+  // round count silently produces meaningless runs — see driftAchieved's note.
+  const maxRounds = Math.max(rounds, Number(process.env.ETM_MAX_DRIFT_ROUNDS ?? 6));
+
+  for (let turn = 1; turn <= maxRounds; turn++) {
     const reply = await sendMessageTolerant(page, nudge);
     // A transport error is not a reply — it is neither a save nor a proposal, and
     // counting it as either would corrupt the drift bookkeeping.
     const saved = !reply.transportError && looksSaved(reply.text);
+    const draft = reply.transportError ? null : extractDraft(reply.text);
+    if (draft && !distinctDrafts.includes(draft)) distinctDrafts.push(draft);
+
     proposals.push({
       turn,
       text: reply.text,
       wasProposal: !reply.transportError && looksLikeProposal(reply.text),
       saved,
+      draft,
     });
+
     // A save that slipped through mid-drift means the premise no longer holds —
     // stop rather than keep pushing, and let the caller see it in `proposals`.
     if (saved) break;
+    // Enough supersedes to have made expected_text stale, and at least the
+    // caller's requested number of turns — stop early rather than burn round trips.
+    if (distinctDrafts.length >= 2 && turn >= rounds) break;
   }
+
   return {
     proposals,
-    driftAchieved: proposals.length >= 2 && proposals.every((p) => !p.saved),
+    distinctDrafts,
+    driftAchieved: distinctDrafts.length >= 2 && proposals.every((p) => !p.saved),
   };
 }

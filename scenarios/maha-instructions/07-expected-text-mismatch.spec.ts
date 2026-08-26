@@ -192,6 +192,11 @@ test.describe.serial('ETM — expected_text_mismatch dead end (clinic 2886 repro
     // browser never got a reply) — it can neither confirm nor clear this bug, so it
     // invalidates the run rather than producing a verdict either way.
     if (confirmReply.transportError) {
+      // Leave etm1Landed null, not false: ETM-2 measures recovery cost from a
+      // KNOWN-failed confirm. After a transport error we don't know what the
+      // confirm did, so there is no baseline to measure recovery against and
+      // ETM-2 must skip too rather than report a bogus round count.
+      etm1Landed = null;
       recorder.record({
         id: 'ETM-1',
         tool: 'update_instruction(instruction_id, new_text, expected_text) — stale-draft path',
@@ -212,9 +217,10 @@ test.describe.serial('ETM — expected_text_mismatch dead end (clinic 2886 repro
       id: 'ETM-1',
       tool: 'update_instruction(instruction_id, new_text, expected_text) — stale-draft path',
       trigger: `${DRIFT_ROUNDS}x "${DRIFT_NUDGE}" (unconfirmed) → "نعم"`,
-      result: reproduced ? 'FAIL' : !premiseHeld ? 'NEEDS_REVIEW' : etm1Landed ? 'PASS' : 'FAIL',
+      result: reproduced ? 'FAIL' : !premiseHeld ? 'UNABLE_TO_TEST' : etm1Landed ? 'PASS' : 'FAIL',
       evidence:
         `drift_premise_held=${premiseHeld} (turns=${drift.proposals.length}, ` +
+        `distinct_drafts=${drift.distinctDrafts.length}, ` +
         `looked_like_proposal=${drift.proposals.filter((p) => p.wasProposal).length}, ` +
         `any_saved_mid_drift=${drift.proposals.some((p) => p.saved)}) | ` +
         `confirm_reply="${confirmReply.text}" | ` +
@@ -228,7 +234,13 @@ test.describe.serial('ETM — expected_text_mismatch dead end (clinic 2886 repro
     // needs to judge whether the model really was re-drafting from its own
     // previous draft, which no assertion can decide.
     for (const p of drift.proposals) {
-      console.log(`[ETM-1 drift turn ${p.turn}] proposal=${p.wasProposal} saved=${p.saved} :: ${p.text}`);
+      console.log(
+        `[ETM-1 drift turn ${p.turn}] proposal=${p.wasProposal} saved=${p.saved} ` +
+          `draft=${p.draft ? JSON.stringify(p.draft.slice(0, 80)) : 'none'} :: ${p.text}`
+      );
+    }
+    console.log(`[ETM-1] distinct drafts seen: ${drift.distinctDrafts.length}`);
+    {
     }
     console.log(`[ETM-1 confirm reply] ${confirmReply.text}`);
 
@@ -244,10 +256,10 @@ test.describe.serial('ETM — expected_text_mismatch dead end (clinic 2886 repro
 
     if (!premiseHeld) {
       console.warn(
-        '[ETM-1] The drift phase did not run 2+ turns without a save, so this run does NOT ' +
-          'exercise the stale-draft path — and since the canned failure string did not appear ' +
-          'either, the result is not meaningful in either direction. Raise ETM_DRIFT_ROUNDS ' +
-          '(default 3) and re-run.'
+        `[ETM-1] Maha produced only ${drift.distinctDrafts.length} distinct draft(s) across ` +
+          `${drift.proposals.length} turns — it re-explained the SAME pending proposal instead of ` +
+          'superseding it, so expected_text never went stale and the bug could not fire. This run ' +
+          'proves nothing in either direction. Raise ETM_MAX_DRIFT_ROUNDS (default 6) and re-run.'
       );
       test.skip();
       return;

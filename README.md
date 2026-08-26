@@ -80,6 +80,15 @@ driving the real chat UI at `dev.reporty.sa/customer/my-clinic` → MyFacility
   after a hard refresh. `ETM-2` is diagnostic only — it measures how many manual
   "حاول مرة اخري" rounds a user needs when the first confirm is wasted. See
   `helpers/expected-text-mismatch.ts` for the full mechanism.
+
+  **Reproduction is stochastic — read the result codes carefully.** The bug can
+  only fire if Maha actually SUPERSEDES its own pending proposal with a new
+  draft; sometimes it just re-explains the one already pending, in which case
+  `expected_text` never goes stale and the bug cannot occur. Measured on dev
+  against known-buggy code: reproduced in 1 of 2 valid runs. So a single green
+  run does **not** clear this bug — run it 3+ times and look at the spread. A
+  run where no supersede happened self-reports `UNABLE_TO_TEST` and skips rather
+  than claiming a pass.
 - **`section-bug005-false-success.skip.ts`:** the separate BUG-005
   false-success 5-phase probe (write → immediate read → delayed read →
   retry → duplicate check). Named `.skip.ts` **on purpose** — it's a
