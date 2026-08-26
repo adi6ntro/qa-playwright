@@ -66,8 +66,21 @@ const BASE_TEXT =
   '- الحدود الطبية: ممنوع تقديم أي نصيحة طبية أو تشخيص، وممنوع ذكر جرعات أدوية.\n' +
   '- الحدود السلوكية: لا تعرض مساعدات إضافية، ولا تفتح نقاشات جديدة، وأنهِ المحادثة بلطف بعد الرد.';
 
-/** Identical every turn, on purpose — see driftUnconfirmedProposals' comment. */
-const DRIFT_NUDGE = `رغم التعليمات اللي في قاعدة ${MARKER}، برضه بحس الكلام كتير، عايزين نقلل الرغي`;
+/**
+ * Escalating nudges, not one repeated string — see driftUnconfirmedProposals'
+ * docstring. Repeating the doctor's verbatim message produced the SAME proposal
+ * every turn on dev (6 turns, 1 distinct draft), so no supersede ever occurred
+ * and the bug's precondition was never met. Each nudge here asks for a
+ * materially shorter rewrite than the last, which is what forces a genuinely new
+ * draft to replace the pending one.
+ */
+const DRIFT_NUDGES = [
+  `رغم التعليمات اللي في قاعدة ${MARKER}، برضه بحس الكلام كتير، عايزين نقلل الرغي`,
+  'لسه طويلة، خليها أقصر من كده بكتير',
+  'اختصريها أكتر، سطر واحد بس',
+  'شيلي أي كلام زيادة، سيبي الأهم بس',
+  'أقصر كمان، نص سطر لو ينفع',
+];
 
 const DRIFT_ROUNDS = Number(process.env.ETM_DRIFT_ROUNDS ?? 3);
 
@@ -123,12 +136,36 @@ test.describe.serial('ETM — expected_text_mismatch dead end (clinic 2886 repro
     // the browser had already given up). Give it a real budget before concluding
     // anything, rather than failing setup on what may be a slow success.
     const saveReplyText = saveReplies[saveReplies.length - 1].text;
-    if (!savedRow && isTransportError(saveReplyText)) {
+
+    // Two ways the save can look absent without actually having failed for good:
+    //
+    //  (a) transport error — the browser never heard back, but the write can
+    //      still complete server-side (observed landing ~90s later).
+    //  (b) Maha replies with an INTENT rather than an outcome — "تمام، أحفظها
+    //      الحين" ("ok, I'll save it now"), observed on a dev run. It carries no
+    //      "؟", so sendAndConfirm's prompt heuristic doesn't auto-confirm, and it
+    //      carries no "✅", so it isn't a success either. The turn just ends.
+    //
+    // Both are worth waiting out before failing setup, and (b) additionally
+    // deserves one explicit nudge — the rule may genuinely never have been saved.
+    if (!savedRow) {
       console.warn(
-        '[ETM-0] The chat UI showed its transport-error bubble; re-reading the panel for up to ' +
-          '120s before deciding, since the write may still complete server-side.'
+        `[ETM-0] ${MARKER} not in the panel yet (reply was: "${saveReplyText.slice(0, 80)}") — ` +
+          'polling before deciding.'
       );
-      await waitForPanelCondition(sharedPage, (rows) => rows.some((r) => r.text.includes(MARKER)));
+      await waitForPanelCondition(
+        sharedPage,
+        (rows) => rows.some((r) => r.text.includes(MARKER)),
+        { budgetMs: isTransportError(saveReplyText) ? 120_000 : 30_000 }
+      );
+      saved = await readPanelAfterRefresh(sharedPage);
+      savedRow = saved.rows.find((r) => r.text.includes(MARKER));
+    }
+
+    // Still nothing, and it wasn't a transport failure: ask once, explicitly.
+    if (!savedRow && !isTransportError(saveReplyText)) {
+      console.warn('[ETM-0] still not saved — sending one explicit save nudge.');
+      await sendAndConfirm(sharedPage, `احفظي القاعدة دي دلوقتي:\n${BASE_TEXT}`);
       saved = await readPanelAfterRefresh(sharedPage);
       savedRow = saved.rows.find((r) => r.text.includes(MARKER));
     }
@@ -187,7 +224,7 @@ test.describe.serial('ETM — expected_text_mismatch dead end (clinic 2886 repro
     expect(textAfterFirstEdit, 'ETM-0 must have run first').toBeTruthy();
 
     // Phase 2 — build the stale draft. No confirmation on any of these turns.
-    const drift = await driftUnconfirmedProposals(sharedPage, DRIFT_NUDGE, DRIFT_ROUNDS);
+    const drift = await driftUnconfirmedProposals(sharedPage, DRIFT_NUDGES, DRIFT_ROUNDS);
 
     // Phase 3 — the moment of truth: a single, unambiguous "yes".
     const confirmReply = await sendMessageTolerant(sharedPage, 'نعم');
@@ -225,7 +262,7 @@ test.describe.serial('ETM — expected_text_mismatch dead end (clinic 2886 repro
       recorder.record({
         id: 'ETM-1',
         tool: 'update_instruction(instruction_id, new_text, expected_text) — stale-draft path',
-        trigger: `${DRIFT_ROUNDS}x "${DRIFT_NUDGE}" (unconfirmed) → "نعم"`,
+        trigger: `${DRIFT_ROUNDS}+ escalating shorten-nudges (unconfirmed) → "نعم"`,
         result: 'UNABLE_TO_TEST',
         evidence:
           'The chat UI showed its transport-error bubble on the confirm turn (the browser never ' +
@@ -241,7 +278,7 @@ test.describe.serial('ETM — expected_text_mismatch dead end (clinic 2886 repro
     recorder.record({
       id: 'ETM-1',
       tool: 'update_instruction(instruction_id, new_text, expected_text) — stale-draft path',
-      trigger: `${DRIFT_ROUNDS}x "${DRIFT_NUDGE}" (unconfirmed) → "نعم"`,
+      trigger: `${DRIFT_ROUNDS}+ escalating shorten-nudges (unconfirmed) → "نعم"`,
       result: reproduced ? 'FAIL' : !premiseHeld ? 'UNABLE_TO_TEST' : etm1Landed ? 'PASS' : 'FAIL',
       evidence:
         `drift_premise_held=${premiseHeld} (turns=${drift.proposals.length}, ` +

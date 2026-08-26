@@ -306,15 +306,25 @@ export async function deleteTrackedRule(
 }
 
 /**
- * Maha consistently wraps a proposed rule wording in Arabic guillemets — «...» —
- * in every sample across the clinic 2886 sessions and every dev run so far. That
- * quoted block is the actual draft, and comparing it turn-over-turn is the only
- * way to tell a REAL supersede (a new draft, which is what makes expected_text
- * drift) from a turn that merely re-explains the draft already pending.
+ * Maha wraps rule wordings in Arabic guillemets — «...». Comparing the draft
+ * turn-over-turn is the only way to tell a REAL supersede (a new draft, which is
+ * what makes expected_text drift) from a turn that merely re-offers the draft
+ * already pending.
+ *
+ * Takes the LAST block, not the first (fixed 2026-08-26 from a dev run): a reply
+ * routinely carries TWO quoted blocks — the rule's CURRENT text followed by the
+ * PROPOSED replacement, e.g.
+ *
+ *     القاعدة الحالية: «...old...»   هل تقصدين أعدّلها لتصبح: «...new...»
+ *
+ * Reading the first block therefore tracked the stored text (identical every
+ * turn by definition, since nothing is being saved during the drift phase)
+ * rather than the proposal. A single-block reply is unaffected — last === first.
  */
 export function extractDraft(text: string): string | null {
-  const m = text.match(/«([\s\S]*?)»/);
-  return m ? m[1].replace(/\s+/g, ' ').trim() : null;
+  const blocks = [...text.matchAll(/«([\s\S]*?)»/g)];
+  if (blocks.length === 0) return null;
+  return blocks[blocks.length - 1][1].replace(/\s+/g, ' ').trim();
 }
 
 export interface DriftResult {
@@ -348,15 +358,23 @@ export interface DriftResult {
  * This is the part that actually builds the stale draft, and the part every
  * simpler reproduction attempt leaves out.
  *
- * The nudge text is deliberately IDENTICAL each turn — that is what the doctor
- * literally did in sess-1787602994817 (the same message at turns 25/27/29/31,
- * minutes apart), and repeating it verbatim gives the model no new information
- * to anchor on, which is what makes it re-draft from its own previous draft
- * rather than from the stored text.
+ * The nudges ESCALATE rather than repeat (changed 2026-08-26 after three dev
+ * runs produced no valid verdict). The original design repeated the doctor's own
+ * message verbatim, as in sess-1787602994817 (turns 25/27/29/31). On dev that
+ * reliably produced the SAME proposal every time — 6 turns, 5 proposals, 1
+ * distinct draft — so no supersede ever happened and expected_text never went
+ * stale. Same input, same output: the model is far more deterministic here than
+ * the messy production session was.
+ *
+ * What the bug actually needs is not a repeated MESSAGE but a superseded
+ * PROPOSAL — a second, materially different draft replacing the pending one.
+ * Escalating the nudge makes that happen reliably while preserving the real
+ * precondition, so the scenario stays faithful to the mechanism rather than to
+ * one transcript's surface details.
  */
 export async function driftUnconfirmedProposals(
   page: Page,
-  nudge: string,
+  nudges: string[],
   rounds: number
 ): Promise<DriftResult> {
   const proposals: DriftResult['proposals'] = [];
@@ -368,8 +386,25 @@ export async function driftUnconfirmedProposals(
   // round count silently produces meaningless runs — see driftAchieved's note.
   const maxRounds = Math.max(rounds, Number(process.env.ETM_MAX_DRIFT_ROUNDS ?? 6));
 
+  let transportRetries = 0;
   for (let turn = 1; turn <= maxRounds; turn++) {
+    // Escalating nudges rather than one repeated string — see the note on the
+    // nudge list in the spec for why an identical message stopped working.
+    const nudge = nudges[Math.min(turn - 1, nudges.length - 1)];
     const reply = await sendMessageTolerant(page, nudge);
+
+    // A transport error is a lost round, not a drift turn: the agent never
+    // answered, so nothing about the proposal state changed. Don't let it burn a
+    // round of the budget (observed consuming turn 3 of 6 on a dev run).
+    if (reply.transportError && transportRetries < 2) {
+      transportRetries += 1;
+      console.warn(
+        `[driftUnconfirmedProposals] transport error on turn ${turn} — not counting it as a ` +
+          `drift turn (retry ${transportRetries}/2).`
+      );
+      turn -= 1;
+      continue;
+    }
     // A transport error is not a reply — it is neither a save nor a proposal, and
     // counting it as either would corrupt the drift bookkeeping.
     const saved = !reply.transportError && looksSaved(reply.text);
