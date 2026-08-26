@@ -284,7 +284,8 @@ test.describe.serial('ETM — expected_text_mismatch dead end (clinic 2886 repro
         `drift_premise_held=${premiseHeld} (turns=${drift.proposals.length}, ` +
         `distinct_drafts=${drift.distinctDrafts.length}, ` +
         `looked_like_proposal=${drift.proposals.filter((p) => p.wasProposal).length}, ` +
-        `any_saved_mid_drift=${drift.proposals.some((p) => p.saved)}) | ` +
+        `any_saved_mid_drift=${drift.proposals.some((p) => p.saved)}, ` +
+        `transport_error_turns=${drift.transportErrorTurns}) | ` +
         `confirm_reply="${confirmReply.text}" | ` +
         `error_markers=[${markers.matched.join(', ') || 'none'}] | ` +
         `canned_technical_failure=${markers.technicalFailureAffirmed} | ` +

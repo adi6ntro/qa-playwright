@@ -197,11 +197,23 @@ export async function waitForPanelCondition(
   }
 }
 
+/**
+ * Plain timer, NOT `page.waitForTimeout`.
+ *
+ * Playwright ties `page.waitForTimeout` to the current runnable, so it throws
+ * "page.waitForTimeout: Test ended." once the owning test has finished — which is
+ * exactly when `test.afterAll` cleanup runs. Live-hit 2026-08-26: after ETM-1
+ * failed, cleanup aborted on the very first wait and left the `[ETM_TEST_2026]`
+ * rule behind on dev for the next run to trip over. A cleanup path must not use
+ * any test-lifecycle-bound API.
+ */
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
 /** Hard refresh → back to the wizard step → read the panel. Ground truth, no Maha. */
 export async function readPanelAfterRefresh(page: Page) {
   await page.reload();
   await gotoAiInstructionStep(page);
-  await page.waitForTimeout(6_000); // panel polls every 4s (ai-instruction.js)
+  await sleep(6_000); // panel polls every 4s (ai-instruction.js)
   return getInstructionPanelState(page);
 }
 
@@ -283,27 +295,48 @@ export async function deleteTrackedRule(
   marker: string,
   tracked: TrackedRule | null
 ): Promise<{ success: boolean; via: string }> {
-  const byMarker = await readMarkerText(page, marker);
-  if (byMarker) {
-    const outcome = await deleteMarkerUntilGone(page, marker);
-    if (outcome.success) return { success: true, via: 'marker' };
+  // Deliberately self-contained rather than delegating to bug005-probe's
+  // deleteMarkerUntilGone: that helper waits via page.waitForTimeout, which
+  // throws once the owning test has ended (see `sleep` above) — the exact reason
+  // cleanup silently gave up and stranded the test rule on dev.
+  const attempts = 3;
+
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    const state = await getInstructionPanelState(page);
+    const byMarker = state.rows.find((r) => r.text.includes(marker));
+    const byPosition = tracked ? state.rows.find((r) => r.id === tracked.id) : undefined;
+    const target = byMarker ?? (tracked && byPosition?.text === tracked.text ? byPosition : undefined);
+
+    if (!target) {
+      return { success: true, via: attempt === 1 ? 'already-gone' : `attempt:${attempt - 1}` };
+    }
+
+    const request = byMarker
+      ? `احذفي القاعدة اللي فيها كلمة ${marker}`
+      : `احذفي القاعدة رقم ${target.id}`;
+
+    try {
+      await sendAndConfirm(page, request);
+    } catch (err) {
+      return { success: false, via: `send-failed:${(err as Error).message.split('\n')[0]}` };
+    }
+
+    await sleep(attempt * 5_000);
+    await page.reload().catch(() => {});
+    await gotoAiInstructionStep(page).catch(() => {});
+    await sleep(4_000);
+
+    const after = await getInstructionPanelState(page);
+    // Verify by the rule's own text being gone, not by the count dropping — a
+    // count drop alone could mean some OTHER rule was removed.
+    if (!after.rows.some((r) => r.text === target.text)) {
+      return { success: true, via: byMarker ? `marker:${attempt}` : `position:${target.id}` };
+    }
   }
 
-  if (!tracked) return { success: false, via: 'no-handle' };
-
-  const before = await getInstructionPanelState(page);
-  if (!before.rows.some((r) => r.id === tracked.id)) {
-    return { success: true, via: 'already-gone' };
-  }
-
-  await sendAndConfirm(page, `احذفي القاعدة رقم ${tracked.id}`);
-  const after = await readPanelAfterRefresh(page);
-
-  // Verify by the rule's own text disappearing, not just by the count dropping —
-  // a count drop alone could mean some OTHER rule was removed.
-  const gone = !after.rows.some((r) => r.text === tracked.text);
-  return { success: gone, via: `position:${tracked.id}` };
+  return { success: false, via: `exhausted:${attempts}` };
 }
+
 
 /**
  * Maha wraps rule wordings in Arabic guillemets — «...». Comparing the draft
@@ -327,6 +360,7 @@ export function extractDraft(text: string): string | null {
   return blocks[blocks.length - 1][1].replace(/\s+/g, ' ').trim();
 }
 
+
 export interface DriftResult {
   /** One entry per un-confirmed re-draft turn, in order. */
   proposals: {
@@ -338,6 +372,8 @@ export interface DriftResult {
   }[];
   /** Distinct drafts seen, in first-seen order. */
   distinctDrafts: string[];
+  /** Turns recorded despite carrying no reply (retry budget spent) — run quality. */
+  transportErrorTurns: number;
   /**
    * True only when the model actually SUPERSEDED its own proposal at least once —
    * i.e. 2+ materially different drafts, with no save in between.
@@ -386,8 +422,17 @@ export async function driftUnconfirmedProposals(
   // round count silently produces meaningless runs — see driftAchieved's note.
   const maxRounds = Math.max(rounds, Number(process.env.ETM_MAX_DRIFT_ROUNDS ?? 6));
 
-  let transportRetries = 0;
+  // Per-turn, not a single shared budget. Live-hit 2026-08-26: turn 1 alone burned
+  // both retries, so turns 3, 4 and 5 — also transport errors — were each recorded
+  // as real drift turns carrying "There's a technical issue…" as if it were Maha's
+  // answer. 4 of 6 turns were noise, yet the run still produced a verdict.
+  const perTurnTransportRetries = 2;
+  // Global stop so a sustained outage can't spin here forever.
+  const maxTransportRetriesTotal = Number(process.env.ETM_MAX_TRANSPORT_RETRIES ?? 8);
+  let transportRetriesTotal = 0;
+
   for (let turn = 1; turn <= maxRounds; turn++) {
+    let turnTransportRetries = 0;
     // Escalating nudges rather than one repeated string — see the note on the
     // nudge list in the spec for why an identical message stopped working.
     const nudge = nudges[Math.min(turn - 1, nudges.length - 1)];
@@ -396,14 +441,26 @@ export async function driftUnconfirmedProposals(
     // A transport error is a lost round, not a drift turn: the agent never
     // answered, so nothing about the proposal state changed. Don't let it burn a
     // round of the budget (observed consuming turn 3 of 6 on a dev run).
-    if (reply.transportError && transportRetries < 2) {
-      transportRetries += 1;
+    if (
+      reply.transportError &&
+      turnTransportRetries < perTurnTransportRetries &&
+      transportRetriesTotal < maxTransportRetriesTotal
+    ) {
+      turnTransportRetries += 1;
+      transportRetriesTotal += 1;
       console.warn(
         `[driftUnconfirmedProposals] transport error on turn ${turn} — not counting it as a ` +
-          `drift turn (retry ${transportRetries}/2).`
+          `drift turn (turn retry ${turnTransportRetries}/${perTurnTransportRetries}, ` +
+          `total ${transportRetriesTotal}/${maxTransportRetriesTotal}).`
       );
       turn -= 1;
       continue;
+    }
+    if (reply.transportError) {
+      console.warn(
+        `[driftUnconfirmedProposals] transport error on turn ${turn} and the retry budget is ` +
+          'spent — recording it, but this turn carries no reply from Maha.'
+      );
     }
     // A transport error is not a reply — it is neither a save nor a proposal, and
     // counting it as either would corrupt the drift bookkeeping.
@@ -430,6 +487,7 @@ export async function driftUnconfirmedProposals(
   return {
     proposals,
     distinctDrafts,
+    transportErrorTurns: proposals.filter((p) => isTransportError(p.text)).length,
     driftAchieved: distinctDrafts.length >= 2 && proposals.every((p) => !p.saved),
   };
 }
