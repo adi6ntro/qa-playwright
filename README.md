@@ -89,6 +89,14 @@ driving the real chat UI at `dev.reporty.sa/customer/my-clinic` → MyFacility
   run does **not** clear this bug — run it 3+ times and look at the spread. A
   run where no supersede happened self-reports `UNABLE_TO_TEST` and skips rather
   than claiming a pass.
+
+  The suite tracks its rule by marker **and** by panel position, because Maha
+  rewrites the rule when asked to shorten it and has been observed dropping the
+  `[ETM_TEST_2026]` marker along with the rest of the "filler". Position alone
+  isn't safe either (`fo-irow-<id>` renders a 1-based POSITION, which shifts when
+  any earlier rule is added or removed), so the positional fallback is only
+  trusted while the panel count is unchanged. If both handles are lost the run
+  fails loudly instead of asserting against some other clinic rule.
 - **`section-bug005-false-success.skip.ts`:** the separate BUG-005
   false-success 5-phase probe (write → immediate read → delayed read →
   retry → duplicate check). Named `.skip.ts` **on purpose** — it's a

@@ -1,5 +1,11 @@
 import type { Page } from '@playwright/test';
-import { sendMessage, getInstructionPanelState, gotoAiInstructionStep } from './maha-chat';
+import {
+  sendMessage,
+  sendAndConfirm,
+  getInstructionPanelState,
+  gotoAiInstructionStep,
+} from './maha-chat';
+import { deleteMarkerUntilGone } from './bug005-probe';
 
 /**
  * Probe for the `expected_text_mismatch` dead end — root-caused 2026-08-26 from
@@ -204,6 +210,99 @@ export async function readMarkerText(page: Page, marker: string): Promise<string
   const state = await getInstructionPanelState(page);
   const row = state.rows.find((r) => r.text.includes(marker));
   return row ? row.text : null;
+}
+
+/**
+ * A handle on "the rule this test is editing", robust to Maha rewriting it out of
+ * recognition.
+ *
+ * Why this is not just a marker substring (live-hit 2026-08-26, dev run 3): asked
+ * to shorten the rule, Maha rewrote it and dropped the `[ETM_TEST_2026]` prefix
+ * along with everything else it considered filler. The suite then couldn't find
+ * its own rule, ETM-0 failed on a null lookup, and ETM-1/ETM-2 never ran — a test
+ * defect reported as an app failure.
+ *
+ * Why it is not just the panel row id either: `fo-irow-<id>` renders `instr.id`,
+ * which the API derives as a 1-BASED POSITION (see the tool logs and
+ * update_instruction.py's own `idx = int(instruction_id) - 1`). It shifts the
+ * moment any earlier rule is added or removed.
+ *
+ * So: prefer the marker while it survives, fall back to position — and only trust
+ * the position while the panel's total count is unchanged, which is the condition
+ * under which a position cannot have shifted.
+ */
+export interface TrackedRule {
+  id: string;
+  text: string;
+  /** Panel count when this handle was (re)resolved — guards the positional fallback. */
+  count: number | null;
+}
+
+export async function resolveTrackedRule(
+  page: Page,
+  marker: string,
+  previous: TrackedRule | null
+): Promise<TrackedRule | null> {
+  const state = await getInstructionPanelState(page);
+
+  const byMarker = state.rows.find((r) => r.text.includes(marker));
+  if (byMarker) return { id: byMarker.id, text: byMarker.text, count: state.count };
+
+  if (!previous) return null;
+
+  // Marker gone — fall back to position, but only if nothing else changed the
+  // list length since we last looked. If the count moved, a position may now
+  // point at a DIFFERENT rule, and silently editing/asserting against the wrong
+  // one is worse than admitting we lost track.
+  if (previous.count !== null && state.count !== previous.count) {
+    console.warn(
+      `[resolveTrackedRule] marker "${marker}" is gone AND the panel count moved ` +
+        `(${previous.count} -> ${state.count}) — refusing to guess by position.`
+    );
+    return null;
+  }
+
+  const byPosition = state.rows.find((r) => r.id === previous.id);
+  if (!byPosition) return null;
+
+  console.warn(
+    `[resolveTrackedRule] marker "${marker}" was rewritten out of the rule; ` +
+      `tracking by position id=${previous.id} instead (count unchanged at ${state.count}).`
+  );
+  return { id: byPosition.id, text: byPosition.text, count: state.count };
+}
+
+/**
+ * Delete the tracked rule at cleanup time. `deleteMarkerUntilGone` alone is not
+ * enough here for the same reason as above: once the marker has been rewritten
+ * away, asking Maha to "delete the rule containing X" matches nothing and loops
+ * until it gives up, leaving the row behind to poison the next run's baseline.
+ */
+export async function deleteTrackedRule(
+  page: Page,
+  marker: string,
+  tracked: TrackedRule | null
+): Promise<{ success: boolean; via: string }> {
+  const byMarker = await readMarkerText(page, marker);
+  if (byMarker) {
+    const outcome = await deleteMarkerUntilGone(page, marker);
+    if (outcome.success) return { success: true, via: 'marker' };
+  }
+
+  if (!tracked) return { success: false, via: 'no-handle' };
+
+  const before = await getInstructionPanelState(page);
+  if (!before.rows.some((r) => r.id === tracked.id)) {
+    return { success: true, via: 'already-gone' };
+  }
+
+  await sendAndConfirm(page, `احذفي القاعدة رقم ${tracked.id}`);
+  const after = await readPanelAfterRefresh(page);
+
+  // Verify by the rule's own text disappearing, not just by the count dropping —
+  // a count drop alone could mean some OTHER rule was removed.
+  const gone = !after.rows.some((r) => r.text === tracked.text);
+  return { success: gone, via: `position:${tracked.id}` };
 }
 
 /**

@@ -4,13 +4,16 @@ import { deleteMarkerUntilGone } from '../../helpers/bug005-probe';
 import {
   CANNED,
   classifyErrorMarkers,
+  deleteTrackedRule,
   driftUnconfirmedProposals,
   isTransportError,
   looksSaved,
   readMarkerText,
   readPanelAfterRefresh,
+  resolveTrackedRule,
   sendMessageTolerant,
   waitForPanelCondition,
+  type TrackedRule,
 } from '../../helpers/expected-text-mismatch';
 import { ReportRecorder } from '../../helpers/report';
 
@@ -76,6 +79,12 @@ const recorder = new ReportRecorder('ETM - expected_text_mismatch');
 const LONG_TEST_MS = 900_000;
 
 test.describe.serial('ETM — expected_text_mismatch dead end (clinic 2886 repro)', () => {
+  /**
+   * Handle on the rule under test, carried across the three tests. Not a marker
+   * substring: Maha rewrites the rule and can drop the marker entirely — see
+   * resolveTrackedRule's docstring for the run that caught this.
+   */
+  let tracked: TrackedRule | null = null;
   /** Set by ETM-0, read by ETM-1 — the stored text the drift phase starts from. */
   let textAfterFirstEdit: string | null = null;
   /** Set by ETM-1, read by ETM-2 so the recovery probe only runs when it's warranted. */
@@ -106,6 +115,8 @@ test.describe.serial('ETM — expected_text_mismatch dead end (clinic 2886 repro
     );
     let saved = await readPanelAfterRefresh(sharedPage);
     let savedRow = saved.rows.find((r) => r.text.includes(MARKER));
+    // The marker is guaranteed present at this point — it was just saved verbatim
+    // and nothing has edited it yet — so this first resolve is always by marker.
 
     // A transport error means the browser never heard back — the write can still be
     // in flight (see FRONTEND_TRANSPORT_ERROR's note: observed landing ~90s after
@@ -128,6 +139,8 @@ test.describe.serial('ETM — expected_text_mismatch dead end (clinic 2886 repro
         `Last reply: ${saveReplyText}`
     ).toBeTruthy();
 
+    tracked = { id: savedRow!.id, text: savedRow!.text, count: saved.count };
+
     // The FIRST edit is expected to work even with the bug present — this is
     // exactly why QA saw it as "not consistent from the first message". Doing it
     // here establishes that, and gives the drift phase a real stored value to
@@ -136,10 +149,16 @@ test.describe.serial('ETM — expected_text_mismatch dead end (clinic 2886 repro
       sharedPage,
       `اختصري قاعدة ${MARKER} شوية وخليها أقصر`
     );
-    const afterEdit = await readPanelAfterRefresh(sharedPage);
-    textAfterFirstEdit = afterEdit.rows.find((r) => r.text.includes(MARKER))?.text ?? null;
+    // Re-resolve rather than re-searching by marker: the edit we just made is the
+    // exact operation observed dropping the marker from the rule's text.
+    tracked = await resolveTrackedRule(sharedPage, MARKER, tracked);
+    textAfterFirstEdit = tracked?.text ?? null;
 
     const firstEditLanded = textAfterFirstEdit !== null && textAfterFirstEdit !== savedRow!.text;
+    // Recorded because it changes how the rest of the run is tracked (marker vs
+    // position) — and because "Maha silently deleted the marker while shortening"
+    // is itself worth seeing in the report rather than only in a console warning.
+    const markerSurvived = textAfterFirstEdit !== null && textAfterFirstEdit.includes(MARKER);
 
     recorder.record({
       id: 'ETM-0',
@@ -149,12 +168,18 @@ test.describe.serial('ETM — expected_text_mismatch dead end (clinic 2886 repro
       evidence:
         `save_reply="${saveReplies[saveReplies.length - 1].text}" | ` +
         `edit_reply="${editReplies[editReplies.length - 1].text}" | ` +
-        `panel_count ${before.count}->${saved.count} | first_edit_changed_text=${firstEditLanded}`,
+        `panel_count ${before.count}->${saved.count} | first_edit_changed_text=${firstEditLanded} | ` +
+        `marker_survived_first_edit=${markerSurvived}`,
       confirmRoundsNeeded: saveRounds + editRounds,
       persisted: firstEditLanded,
     });
 
-    expect(textAfterFirstEdit, 'the marker rule must exist before the drift phase').toBeTruthy();
+    expect(
+      textAfterFirstEdit,
+      'lost track of the rule under test after the first edit — if the console shows the marker ' +
+        'was rewritten away AND the panel count moved, resolveTrackedRule deliberately refused to ' +
+        'guess by position rather than risk asserting against the wrong rule'
+    ).toBeTruthy();
   });
 
   test('ETM-1 REPRO — re-draft without confirming, then confirm', async ({ sharedPage }) => {
@@ -169,8 +194,8 @@ test.describe.serial('ETM — expected_text_mismatch dead end (clinic 2886 repro
     const markers = classifyErrorMarkers(confirmReply.text);
 
     // Phase 4 — ground truth. Whatever the chat said, did the stored text move?
-    const after = await readPanelAfterRefresh(sharedPage);
-    const textAfterDrift = after.rows.find((r) => r.text.includes(MARKER))?.text ?? null;
+    tracked = await resolveTrackedRule(sharedPage, MARKER, tracked);
+    const textAfterDrift = tracked?.text ?? null;
     const storedTextChanged = textAfterDrift !== null && textAfterDrift !== textAfterFirstEdit;
 
     etm1Landed = storedTextChanged && !markers.technicalFailureAffirmed;
@@ -302,7 +327,7 @@ test.describe.serial('ETM — expected_text_mismatch dead end (clinic 2886 repro
     // ETM-1 failed. Replay the doctor's own manual recovery from
     // sess-1787602994817 turns 37-40 ("حاول مرة اخري" → proposal → "نعم") and
     // record how many rounds it takes, if it ever lands at all.
-    const beforeText = await readMarkerText(sharedPage, MARKER);
+    const beforeText = tracked?.text ?? (await readMarkerText(sharedPage, MARKER));
     let rounds = 0;
     let landed = false;
     let lastReply = '';
@@ -315,8 +340,8 @@ test.describe.serial('ETM — expected_text_mismatch dead end (clinic 2886 repro
         const confirmAgain = await sendMessageTolerant(sharedPage, 'نعم');
         lastReply = confirmAgain.text;
       }
-      const now = await readPanelAfterRefresh(sharedPage);
-      const nowText = now.rows.find((r) => r.text.includes(MARKER))?.text ?? null;
+      tracked = await resolveTrackedRule(sharedPage, MARKER, tracked);
+      const nowText = tracked?.text ?? null;
       landed = nowText !== null && nowText !== beforeText;
     }
 
@@ -344,12 +369,16 @@ test.describe.serial('ETM — expected_text_mismatch dead end (clinic 2886 repro
     try {
       const { gotoAiInstructionStep } = await import('../../helpers/maha-chat');
       await gotoAiInstructionStep(page);
-      const outcome = await deleteMarkerUntilGone(page, MARKER);
+      // Marker first, positional handle as fallback — the rule may no longer
+      // contain the marker at all by this point.
+      const outcome = await deleteTrackedRule(page, MARKER, tracked);
       if (!outcome.success) {
         console.warn(
-          `[ETM cleanup] ${MARKER} could not be deleted after ${outcome.attempts} attempts — ` +
+          `[ETM cleanup] could not delete the test rule (via=${outcome.via}) — ` +
             'run "npm run cleanup:maha-etm" before the next run.'
         );
+      } else {
+        console.log(`[ETM cleanup] test rule removed (via=${outcome.via}).`);
       }
     } catch (err) {
       console.warn(`[ETM cleanup] skipped: ${(err as Error).message}`);

@@ -45,6 +45,47 @@ export const SEL = {
   agreeBtn: '#fo-ai-agree-btn',
 };
 
+/**
+ * Transient network failures that are worth one more attempt — they say nothing
+ * about the app under test. Live-hit 2026-08-26: a momentary DNS blip raised
+ * `net::ERR_NAME_NOT_RESOLVED` for dev.reporty.sa inside the worker-scoped
+ * `sharedPage` fixture, which aborted the ENTIRE spec ("2 did not run") — an
+ * expensive way to lose a 3-run batch to something that resolved fine seconds
+ * later (verified: dig returned 34.166.227.154, curl returned 200).
+ *
+ * Deliberately narrow: only these connection-level codes retry. An HTTP error,
+ * a redirect to /login, or a missing selector must still fail immediately —
+ * those are real findings, and retrying them would just hide them.
+ */
+const TRANSIENT_NAV_ERRORS = [
+  'ERR_NAME_NOT_RESOLVED',
+  'ERR_CONNECTION_RESET',
+  'ERR_CONNECTION_REFUSED',
+  'ERR_CONNECTION_CLOSED',
+  'ERR_NETWORK_CHANGED',
+  'ERR_INTERNET_DISCONNECTED',
+  'ERR_TIMED_OUT',
+];
+
+async function gotoWithNetworkRetry(page: Page, url: string, attempts = 3): Promise<void> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await page.goto(url);
+      return;
+    } catch (err) {
+      const msg = (err as Error).message || '';
+      const transient = TRANSIENT_NAV_ERRORS.some((code) => msg.includes(code));
+      if (!transient || attempt >= attempts) throw err;
+      const backoffMs = attempt * 5_000;
+      console.warn(
+        `[gotoWithNetworkRetry] transient network error on attempt ${attempt}/${attempts} ` +
+          `for ${url} — retrying in ${backoffMs / 1000}s. (${msg.split('\n')[0]})`
+      );
+      await page.waitForTimeout(backoffMs);
+    }
+  }
+}
+
 export async function gotoAiInstructionStep(page: Page): Promise<void> {
   // Ensure the desktop "pill tabs" wizard renders (not the <=800px mobile
   // dropdown variant) so the Strategy 2 fallback's selector is guaranteed to
@@ -56,7 +97,7 @@ export async function gotoAiInstructionStep(page: Page): Promise<void> {
 
   // Strategy 1: direct hash load. Per the wizard script (see file header
   // comment), this should just work — no click needed.
-  await page.goto('/customer/my-clinic#ai-instruction');
+  await gotoWithNetworkRetry(page, '/customer/my-clinic#ai-instruction');
   if (await page.locator(SEL.chatInput).isVisible().catch(() => false)) return;
 
   // Strategy 2: click the real step-3 tab. Caption is the hardcoded literal
@@ -253,7 +294,13 @@ export async function getInstructionPanelState(page: Page): Promise<InstructionP
 
 /** Reloads the page and re-navigates to the AI Instruction step — used for persistence checks. */
 export async function refreshAndReturnToStep(page: Page): Promise<InstructionPanelState> {
-  await page.reload();
+  await page.reload().catch(async (err) => {
+    // Same transient-network reasoning as gotoWithNetworkRetry above; a reload
+    // that blips shouldn't lose the persistence check it was about to make.
+    if (!TRANSIENT_NAV_ERRORS.some((c) => ((err as Error).message || '').includes(c))) throw err;
+    await page.waitForTimeout(5_000);
+    await page.reload();
+  });
   await gotoAiInstructionStep(page);
   // the panel polls every 4s per ai-instruction.js — give it one cycle
   await page.waitForTimeout(4_500);
