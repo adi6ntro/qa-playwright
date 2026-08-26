@@ -1,0 +1,260 @@
+import type { Page } from '@playwright/test';
+import { sendMessage, getInstructionPanelState, gotoAiInstructionStep } from './maha-chat';
+
+/**
+ * Probe for the `expected_text_mismatch` dead end — root-caused 2026-08-26 from
+ * prod clinic 2886's stored chat sessions (`reporty-onboard-phase3/2886/`,
+ * sess-1787602994817 and sess-1787518391752) plus the prod pod logs of
+ * namespace `reporty-onbrd3-ai-agent-api-prod`.
+ *
+ * QA reported it as "the assistant errors out and stops responding after 2+
+ * interactions". The real mechanism:
+ *
+ *   1. The owner asks for the same rule to be re-worded several times in a row
+ *      without ever confirming. Each turn Maha emits a NEW proposal that
+ *      supersedes the previous one, so its idea of "the current wording" drifts
+ *      onto its own latest unconfirmed draft.
+ *   2. On the eventual "نعم", it calls update_instruction with
+ *      expected_text = that draft. The tool correctly rejects it with
+ *      {"error": "expected_text_mismatch", "actual_text": <the real stored text>}
+ *      so the model can retry with the right value.
+ *   3. `expected_text_mismatch` was missing from the orchestrator's
+ *      _KNOWN_ERROR_SENTINELS, so _inv()'s sanitizer replaced the whole result —
+ *      actual_text included — with a bare "tool_temporarily_unavailable". With
+ *      the ground truth stripped out the model could not self-correct: every
+ *      retry re-sent the same wrong expected_text until the confirm-retry budget
+ *      was exhausted, and the owner got _TECHNICAL_FAILURE_AFFIRMED_TEXT.
+ *
+ * That is why it never fails on the first message of a session — it needs 2+
+ * proposal turns to build the stale draft first. Any reproduction that just
+ * sends one edit and confirms it will pass whether the bug is present or not.
+ *
+ * A browser can't read server logs, so the verdict here rests on the two things
+ * a browser CAN see: the exact canned failure string, and whether the rule's
+ * text in the panel actually changed after a hard refresh.
+ */
+
+/**
+ * Server-canned reply templates, copied verbatim from
+ * `reporty-onboard-phase3/inapp_agent/orchestrators/maha_inapp_agent.py`. These
+ * are fixed strings the orchestrator substitutes for the model's own text, NOT
+ * model output — so exact-substring matching is reliable here in a way it never
+ * is for free-form replies. If a match stops working, diff against that file
+ * first; the wording living in one place is the whole reason this is matchable.
+ */
+export const CANNED = {
+  /** _TECHNICAL_FAILURE_AFFIRMED_TEXT — owner affirmed, every confirm retry failed. */
+  technicalFailureAffirmed: 'واجهت مشكلة تقنية حالت دون تنفيذ الإجراء',
+  /** _UNARMED_PROPOSAL_CORRECTION_TEXT — retries exhausted with nothing armed. */
+  unarmedProposal: 'لم أتمكن من تجهيز هذا التغيير بشكل صحيح',
+  /** _FABRICATED_ISSUE_REPROMPT_TEXT — "I didn't get a clear yes/no". */
+  unclearAnswer: 'لم أستلم منك ردًا واضحًا بنعم أو لا',
+} as const;
+
+/**
+ * Free-form "technical problem" wordings the MODEL itself improvises when a tool
+ * error reaches it as an opaque failure. Weaker signal than CANNED (the model
+ * phrases these differently every time, so this list can never be exhaustive) —
+ * recorded as diagnostic context, never as the pass/fail verdict on its own.
+ * All three were observed verbatim in the clinic 2886 sessions.
+ */
+export const MODEL_IMPROVISED_FAILURE = ['مشكلة تقنية', 'مشكلة فنية', 'خطأ فني'];
+
+export interface ErrorMarkers {
+  /** The hard signal: the orchestrator gave up after exhausting confirm retries. */
+  technicalFailureAffirmed: boolean;
+  unarmedProposal: boolean;
+  unclearAnswer: boolean;
+  /** Soft signal — the model improvised an apology; may or may not be this bug. */
+  improvisedFailure: boolean;
+  matched: string[];
+}
+
+export function classifyErrorMarkers(text: string): ErrorMarkers {
+  const matched: string[] = [];
+  const hit = (needle: string) => {
+    const found = text.includes(needle);
+    if (found) matched.push(needle);
+    return found;
+  };
+  return {
+    technicalFailureAffirmed: hit(CANNED.technicalFailureAffirmed),
+    unarmedProposal: hit(CANNED.unarmedProposal),
+    unclearAnswer: hit(CANNED.unclearAnswer),
+    improvisedFailure: MODEL_IMPROVISED_FAILURE.some((n) => hit(n)),
+    matched,
+  };
+}
+
+/**
+ * Arabic negation immediately before a success verb. Needed because the success
+ * phrases below are SUBSTRINGS of their own negations: "تم حفظ" occurs inside
+ * "لم يتم حفظه" ("was NOT saved"), and "تم تعديل" inside "لم يتم تعديله".
+ *
+ * Live-caught on the very first baseline run (2026-08-26, dev): Maha's turn-2
+ * reply "أعتذر دكتور، يبدو أن التعديل الأخير لم يتم حفظه بالشكل الصحيح" — a
+ * failure apology followed by a fresh proposal — was classified as a SAVE. That
+ * ended the drift loop early and dropped the proposal count below the premise
+ * threshold, which made ETM-1 skip itself while the bug was reproducing
+ * perfectly in the same run. A negated success phrase is the single most likely
+ * thing to appear in exactly the failure this suite hunts, so getting this wrong
+ * silently disarms the test.
+ *
+ * The optional trailing [يتن] absorbs the imperfect prefix in "لم يتم ..." —
+ * without it the character between the particle and the needle blocks the match.
+ */
+const NEGATION_BEFORE = /(لم|لن|ما|مش|بدون|غير)\s*[يتن]?$/;
+
+/** True if `needle` appears at least once NOT preceded by a negation particle. */
+function hasAffirmative(text: string, needle: string): boolean {
+  let idx = text.indexOf(needle);
+  while (idx !== -1) {
+    const window = text.slice(Math.max(0, idx - 12), idx);
+    if (!NEGATION_BEFORE.test(window)) return true;
+    idx = text.indexOf(needle, idx + 1);
+  }
+  return false;
+}
+
+/**
+ * A reply that claims the write went through. `✅` is treated as affirmative on
+ * its own — the orchestrator only emits it on a real success path, and it has
+ * never been observed inside a negated sentence.
+ */
+export function looksSaved(text: string): boolean {
+  return (
+    text.includes('✅') ||
+    hasAffirmative(text, 'تم تعديل') ||
+    hasAffirmative(text, 'تم حفظ') ||
+    hasAffirmative(text, 'تم إضافة')
+  );
+}
+
+/** A reply that is asking for a yes/no rather than reporting an outcome. */
+export function looksLikeProposal(text: string): boolean {
+  return (text.includes('؟') || text.includes('?')) && !looksSaved(text);
+}
+
+/**
+ * The FRONTEND's own transport-failure bubble (public/js/facility/ai-instruction.js,
+ * `_foAiShowChatError`) — rendered by the fetch's `.catch()`, i.e. the browser never
+ * got a reply. It is NOT a message from Maha and must never be read as one.
+ *
+ * Live-caught 2026-08-26 on dev: a turn whose confirm-retry loop ran long took ~90s
+ * end to end (message at 05:33:05, agent reply at 05:34:35), which is past the
+ * Laravel proxy's own timeout — so the browser showed this error while the agent
+ * went on to complete `save_instruction` successfully server-side. Anything reading
+ * this bubble as "Maha's reply" concludes the write failed when it actually
+ * succeeded, which is exactly backwards.
+ *
+ * Note for anyone tempted to automate the app's own "Retry" chip: it RE-SENDS the
+ * same message (`retryBtn.onclick` → `_foAiSendChatMsg(text, false)`). After a
+ * timeout whose write already landed, that is a duplicate-write risk — which is why
+ * the helpers below re-read ground truth instead of clicking it.
+ */
+export const FRONTEND_TRANSPORT_ERROR = "There's a technical issue, please try again.";
+
+export function isTransportError(text: string): boolean {
+  return text.includes(FRONTEND_TRANSPORT_ERROR);
+}
+
+/**
+ * sendMessage with a ceiling high enough for a slow confirm-retry turn, and an
+ * explicit transport-error flag so callers can tell "the agent said X" apart from
+ * "the browser never heard back".
+ */
+export async function sendMessageTolerant(
+  page: Page,
+  message: string,
+  timeoutMs = 150_000
+): Promise<{ text: string; transportError: boolean }> {
+  const reply = await sendMessage(page, message, timeoutMs);
+  return { text: reply.text, transportError: isTransportError(reply.text) };
+}
+
+/**
+ * Poll the panel (with a hard refresh each round) until `predicate` holds or the
+ * budget runs out. Used after a transport error: the write may still be in flight
+ * server-side, so "the browser saw an error" is not yet evidence it failed.
+ */
+export async function waitForPanelCondition(
+  page: Page,
+  predicate: (rows: { id: string; text: string }[]) => boolean,
+  opts: { budgetMs?: number } = {}
+): Promise<boolean> {
+  const budgetMs = opts.budgetMs ?? 120_000;
+  const deadline = Date.now() + budgetMs;
+  for (;;) {
+    const state = await readPanelAfterRefresh(page);
+    if (predicate(state.rows)) return true;
+    if (Date.now() >= deadline) return false;
+  }
+}
+
+/** Hard refresh → back to the wizard step → read the panel. Ground truth, no Maha. */
+export async function readPanelAfterRefresh(page: Page) {
+  await page.reload();
+  await gotoAiInstructionStep(page);
+  await page.waitForTimeout(6_000); // panel polls every 4s (ai-instruction.js)
+  return getInstructionPanelState(page);
+}
+
+/** Current stored text of the single rule containing `marker`, or null. */
+export async function readMarkerText(page: Page, marker: string): Promise<string | null> {
+  const state = await getInstructionPanelState(page);
+  const row = state.rows.find((r) => r.text.includes(marker));
+  return row ? row.text : null;
+}
+
+export interface DriftResult {
+  /** One entry per un-confirmed re-draft turn, in order. */
+  proposals: { turn: number; text: string; wasProposal: boolean; saved: boolean }[];
+  /**
+   * True if at least 2 turns went by WITHOUT the rule actually being saved —
+   * which is the real precondition (the model accumulating unconfirmed drafts).
+   *
+   * Deliberately not "2+ turns that look like proposals": a turn can be a
+   * failure apology that still carries a fresh draft (observed on the first
+   * baseline run), and that counts toward the drift just as much as a clean
+   * "shall I save this?" does. What must NOT have happened is a real save.
+   */
+  driftAchieved: boolean;
+}
+
+/**
+ * Phase 2: nudge the SAME rule to be shortened again N times WITHOUT confirming.
+ * This is the part that actually builds the stale draft, and the part every
+ * simpler reproduction attempt leaves out.
+ *
+ * The nudge text is deliberately IDENTICAL each turn — that is what the doctor
+ * literally did in sess-1787602994817 (the same message at turns 25/27/29/31,
+ * minutes apart), and repeating it verbatim gives the model no new information
+ * to anchor on, which is what makes it re-draft from its own previous draft
+ * rather than from the stored text.
+ */
+export async function driftUnconfirmedProposals(
+  page: Page,
+  nudge: string,
+  rounds: number
+): Promise<DriftResult> {
+  const proposals: DriftResult['proposals'] = [];
+  for (let turn = 1; turn <= rounds; turn++) {
+    const reply = await sendMessageTolerant(page, nudge);
+    // A transport error is not a reply — it is neither a save nor a proposal, and
+    // counting it as either would corrupt the drift bookkeeping.
+    const saved = !reply.transportError && looksSaved(reply.text);
+    proposals.push({
+      turn,
+      text: reply.text,
+      wasProposal: !reply.transportError && looksLikeProposal(reply.text),
+      saved,
+    });
+    // A save that slipped through mid-drift means the premise no longer holds —
+    // stop rather than keep pushing, and let the caller see it in `proposals`.
+    if (saved) break;
+  }
+  return {
+    proposals,
+    driftAchieved: proposals.length >= 2 && proposals.every((p) => !p.saved),
+  };
+}

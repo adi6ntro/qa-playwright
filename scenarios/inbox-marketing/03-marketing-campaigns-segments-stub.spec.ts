@@ -2,53 +2,40 @@ import { test, expect } from '@playwright/test';
 import { gotoMarketing } from '../../helpers/marketing';
 
 /**
- * Covers docs/handover/QA_Checklist_Inbox_Marketing_WhatsApp.md Sections F-H
- * (MKT-CAM-*, MKT-SEG-*, MKT-C-04/05, WA-NUM-*).
+ * Covers docs/handover/QA_Checklist_Inbox_Marketing_WhatsApp.md Sections F-H.
  *
- * These are NOT bug reports about missing wiring — they document real,
- * loaded, fully-clickable UI (bulk-campaign.js / create-segment.js / the
- * Add-Contact modal's own inline script ARE all loaded, confirmed by reading
- * every one of them start to finish) that simply never calls a backend, or
- * in Segments' case has a primary action button with literally no click
- * handler anywhere in the codebase. See the checklist doc's "Known
- * limitations" table for the exact file/line evidence behind each claim.
+ * ⚠️ SAFETY — READ BEFORE EDITING THIS FILE ⚠️
+ * As of commit 35787d7c1 ("fixi marketing and inbox", 2026-08-25),
+ * `bulk-campaign.js` is a REAL feature, not a demo:
+ *   - Step 2 "Submit for approval" calls `bkmSubmitTemplate()`, which POSTs
+ *     a real template to Meta via `POST /customer/marketing/templates`.
+ *   - Step 5 "Send Campaign" (`#bkm-send-btn`, still styled with the shared
+ *     `.bkm-btn-next` class) calls `bkmSendCampaign()`, which POSTs to the
+ *     real `POST /customer/marketing/send-campaign` → `MarketingController
+ *     ::sendCampaign()` → loops contacts and hits the real
+ *     `/whatsapp-cloud-send-template` external endpoint per contact.
+ *   - `bkmGetContacts()` currently returns a HARDCODED array
+ *     `_BKM_TEST_CONTACTS` with 4 real phone numbers, only ONE of which
+ *     (`6281266850960`) is the sandbox number this suite is authorized to
+ *     use — the other 3 look like the developer's own personal test
+ *     numbers (marked `// TODO: ganti ke MKT_CONTACTS setelah testing
+ *     selesai` in the source). There is currently no env-var-driven
+ *     override for this list.
  *
- * If any assertion in this file starts FAILING, that means the behavior
- * described above has changed — stop and tell Adi before assuming it's safe
- * to test further (a wired campaign/segment send could now reach real
- * numbers/contacts).
+ * NEVER click `.bkm-btn-next` in a loop or otherwise walk past Step 1 of
+ * this wizard in an automated test — because ALL of the wizard's
+ * next/submit/send buttons share the `.bkm-btn-next` CSS class, a naive
+ * "click next repeatedly" script (like this file used to have) can reach
+ * `#bkm-send-btn` and fire a real WhatsApp send to those 4 real numbers.
+ * A prior version of this test happened to be saved from that only by
+ * Playwright's strict-mode multi-match error on the unscoped locator —
+ * that was luck, not a designed guard. Testing Steps 2-5 for real is
+ * MANUAL-ONLY from now on (see the checklist doc's Section F) until this
+ * gets a safe test-contact-list override.
  */
 
-test.describe('Marketing — Campaigns tab (real wizard UI, simulated backend)', () => {
-  test('MKT-CAM-04: completing the 5-step wizard fires no send request', async ({ page }) => {
-    await gotoMarketing(page, 'campaigns');
-    await expect(page.locator('#tbl-campaigns-body tr').first()).toBeVisible({ timeout: 20_000 });
-
-    const startBtn = page.locator('a', { hasText: 'Start Campaign' }).first();
-    test.skip((await startBtn.count()) === 0, 'No approved template available to open the campaign modal with.');
-
-    let sendFired = false;
-    page.on('request', (req) => {
-      const url = req.url();
-      if (/campaign|bulk|send/i.test(url) && req.method() !== 'GET') sendFired = true;
-    });
-
-    await startBtn.click();
-    await expect(page.locator('#modal-bulk-campaign')).toHaveClass(/open/);
-
-    // Walk all 5 steps via the real bkmNext()-driven wizard, exactly as a
-    // user would, then click whatever the step-5 primary button is.
-    for (let i = 0; i < 4; i++) {
-      await page.locator('.bkm-btn-next').click();
-      await page.waitForTimeout(200);
-    }
-    await page.locator('.bkm-btn-next').click(); // step 5's "Submit for approval" — bkmNext() no-ops here
-    await page.waitForTimeout(1000);
-
-    expect(sendFired).toBe(false); // confirmed: bkmNext() has no send path on any step, including the last
-  });
-
-  test('MKT-CAM-03: "Generate content" always returns the same canned text', async ({ page }) => {
+test.describe('Marketing — Campaigns tab (Step 1 only — see safety note above)', () => {
+  test('MKT-CAM-03: "Generate content" calls the real AI endpoint and returns non-empty text', async ({ page }) => {
     await gotoMarketing(page, 'campaigns');
     const startBtn = page.locator('a', { hasText: 'Start Campaign' }).first();
     test.skip((await startBtn.count()) === 0, 'No approved template available.');
@@ -56,13 +43,39 @@ test.describe('Marketing — Campaigns tab (real wizard UI, simulated backend)',
     await startBtn.click();
     await expect(page.locator('#modal-bulk-campaign')).toHaveClass(/open/);
 
-    const generateBtn = page.locator('button', { hasText: 'Generate' }).first();
-    test.skip((await generateBtn.count()) === 0, 'Generate-content button not present on step 1 markup.');
+    // Step 1 only — bkmGenerateContent() hits POST .../generate-content
+    // (real AI call, no send/contact side effects) and does not advance
+    // the wizard step. Do not call bkmNext()/click any other button here.
+    await page.locator('#bkm-campaign-idea').fill('20% off checkup until end of month');
+    const generateBtn = page.locator('a.bkm-generate-link', { hasText: 'Generate Content' });
+    test.skip((await generateBtn.count()) === 0, 'Generate-content link not present on step 1 markup.');
 
-    await generateBtn.click();
-    await page.waitForTimeout(1500); // bkmGenerateContent()'s hardcoded 1s setTimeout
-    const first = await page.locator('#bkm-content-text').inputValue();
-    expect(first).toContain('20% off your dental checkup'); // the literal hardcoded string in bulk-campaign.js
+    const [resp] = await Promise.all([
+      page.waitForResponse((r) => r.url().includes('/generate-content')),
+      generateBtn.click(),
+    ]);
+    expect(resp.ok()).toBeTruthy();
+    await page.waitForTimeout(500);
+    const text = await page.locator('#bkm-content-text').inputValue();
+    expect(text.length).toBeGreaterThan(0);
+  });
+
+  test('MKT-CAM-05: the real send-campaign endpoint still targets the hardcoded test contact list (canary)', async ({ page }) => {
+    // Deliberately does NOT drive the UI to send anything. This calls the
+    // backend endpoint directly with an instantly-rejectable payload
+    // (empty contacts) purely to prove the endpoint still exists and still
+    // gates on template approval — NOT to exercise a real send path. If
+    // this ever needs a positive (actually-sends) test, that must be a
+    // manual, human-supervised run against an explicit, disposable test
+    // number set — never automated against `_BKM_TEST_CONTACTS` as-is.
+    await gotoMarketing(page, 'campaigns');
+    const csrf = await page.evaluate(() => (window as any).MKT_CONFIG?.csrf);
+    const resp = await page.request.post('/customer/marketing/send-campaign', {
+      data: { template_name: '', contacts: [] },
+      headers: { 'X-CSRF-TOKEN': csrf },
+      failOnStatusCode: false,
+    });
+    expect(resp.status()).toBe(422); // "Missing template_name or contacts" guard in sendCampaign()
   });
 });
 

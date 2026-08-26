@@ -15,8 +15,10 @@
     "test:maha-remaining": "playwright test scenarios/maha-instructions/04-remaining-tools.spec.ts",
     "test:maha-mix": "playwright test scenarios/maha-instructions/05-mix-chat.spec.ts",
     "test:maha-negative": "playwright test scenarios/maha-instructions/06-negative-tests.spec.ts",
+    "test:maha-etm": "playwright test scenarios/maha-instructions/07-expected-text-mismatch.spec.ts",
     "test:maha-all": "playwright test scenarios/maha-instructions/",
     "cleanup:maha-bug005": "playwright test scenarios/maha-instructions/01-cleanup-leftover-markers.spec.ts",
+    "cleanup:maha-etm": "playwright test scenarios/maha-instructions/01b-cleanup-etm-marker.spec.ts",
 
     "test:all": "playwright test scenarios/",
     "report": "playwright show-report"

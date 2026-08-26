@@ -68,6 +68,18 @@ driving the real chat UI at `dev.reporty.sa/customer/my-clinic` → MyFacility
   after that bug is fixed to confirm the fix holds.
 - **`05-mix-chat.spec.ts` / `06-negative-tests.spec.ts`:** multi-tool and
   error-handling scenarios.
+- **`07-expected-text-mismatch.spec.ts` (ETM):** reproduces the
+  `expected_text_mismatch` dead end reported by QA on 2026-08-26 as "the
+  assistant errors out and stops responding after 2+ interactions" (clinic
+  2886). It deliberately spends 3-4 turns re-drafting the SAME rule **without
+  confirming** before it says "نعم" — that drift is what makes the model pass
+  its own unconfirmed draft as `expected_text`, and it is exactly what a naive
+  one-edit-then-confirm reproduction misses. Verdict rests on two
+  browser-visible signals: the canned `_TECHNICAL_FAILURE_AFFIRMED_TEXT` string
+  must not appear, and the rule's text in the panel must really have changed
+  after a hard refresh. `ETM-2` is diagnostic only — it measures how many manual
+  "حاول مرة اخري" rounds a user needs when the first confirm is wasted. See
+  `helpers/expected-text-mismatch.ts` for the full mechanism.
 - **`section-bug005-false-success.skip.ts`:** the separate BUG-005
   false-success 5-phase probe (write → immediate read → delayed read →
   retry → duplicate check). Named `.skip.ts` **on purpose** — it's a
@@ -76,6 +88,9 @@ driving the real chat UI at `dev.reporty.sa/customer/my-clinic` → MyFacility
   default. To run it: temporarily rename it to `.spec.ts`.
 - **`01-cleanup-leftover-markers.spec.ts`:** sweeps up `[BUG005_TEST_*]`
   marker rules left behind by interrupted runs of the above.
+- **`01b-cleanup-etm-marker.spec.ts`:** same, for the ETM suite's
+  `[ETM_TEST_2026]` marker. A leftover marker makes ETM-1 compare against the
+  wrong baseline, so clear it before re-running.
 
 Results here are mostly `NEEDS_REVIEW`, not `PASS`/`FAIL` — a script can
 tell you "the count didn't move" or "the value reverted after refresh", not
@@ -124,8 +139,10 @@ npm run test:maha-b           # Section B (writes) incl. B11-RAPID
 npm run test:maha-remaining   # Sections C-M template/stubs
 npm run test:maha-mix         # multi-tool scenarios
 npm run test:maha-negative    # error-handling scenarios
+npm run test:maha-etm         # expected_text_mismatch repro (~10 real Maha turns, slow)
 npm run test:maha-all         # everything under maha-instructions/
 npm run cleanup:maha-bug005   # sweep leftover [BUG005_TEST_*] markers
+npm run cleanup:maha-etm      # sweep leftover [ETM_TEST_2026] markers
 
 npm run test:all              # absolutely everything (both suites)
 npm run report                # open the HTML report for the last run

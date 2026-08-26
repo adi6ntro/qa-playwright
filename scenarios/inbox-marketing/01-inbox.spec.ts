@@ -35,6 +35,15 @@ test.describe('Inbox', () => {
     await waitForConversations(page);
     await openFirstConversation(page);
 
+    // New behavior (commit 35787d7c1): when the WA 24h customer-service
+    // window is closed (`windowOpen === false`), renderConvStatus() hides
+    // #conv-input-area entirely — only template sends are allowed by WA's
+    // own rules outside that window. Picking a conversation in that state
+    // isn't a bug; this test just needs a conversation where free-text
+    // reply is actually possible.
+    const inputVisible = await page.locator('#conv-input').isVisible();
+    test.skip(!inputVisible, 'Open conversation has its 24h window closed — composer is hidden by design (INB-20).');
+
     let sendFired = false;
     page.on('request', (req) => {
       if (req.url().includes('/send-reply')) sendFired = true;
@@ -44,6 +53,26 @@ test.describe('Inbox', () => {
     await page.locator('#conv-send-btn').click();
     await page.waitForTimeout(1000);
     expect(sendFired).toBe(false);
+  });
+
+  test('INB-20: 24h window closed hides the composer and shows the warning bar', async ({ page }) => {
+    await gotoInbox(page);
+    await waitForConversations(page);
+
+    // Find any conversation whose composer is hidden (window closed) by
+    // walking the list rather than assuming the first one.
+    const items = page.locator('#inbox-chat-list .chat-item');
+    const count = await items.count();
+    let found = false;
+    for (let i = 0; i < count; i++) {
+      await items.nth(i).click();
+      const inputVisible = await page.locator('#conv-input').isVisible();
+      if (!inputVisible) { found = true; break; }
+    }
+    test.skip(!found, 'No conversation in the current list has a closed 24h window right now.');
+
+    await expect(page.locator('#conv-window-warning')).toBeVisible();
+    await expect(page.locator('#conv-window-warning')).toContainText('24h window closed');
   });
 
   test('reply to the sandbox conversation actually sends', async ({ page }) => {
@@ -61,6 +90,10 @@ test.describe('Inbox', () => {
       !digitsOnly.includes(sandboxDigits.slice(-9)),
       `Open conversation (${phoneText}) doesn't match TEST_WA_NUMBER (${TEST_WA_NUMBER}) — ` +
       `select the sandbox conversation manually before running this test, or confirm .env.`
+    );
+    test.skip(
+      !(await page.locator('#conv-input').isVisible()),
+      'Sandbox conversation currently has its 24h window closed — free-text reply is disabled by design (INB-20).'
     );
 
     const marker = `[QA-INBOX ${Date.now() % 100000}] automated reply test`;
