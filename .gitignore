@@ -5,3 +5,4 @@ reports/*.json
 reports/*.md
 playwright-report/
 test-results/
+reports/*.log # .log tidak ter-ignore, nanti ikut ke-commit
