@@ -192,6 +192,33 @@ test.describe.serial('ETM — expected_text_mismatch dead end (clinic 2886 repro
       savedRow = saved.rows.find((r) => r.text.includes(MARKER));
     }
 
+    // Last resort — adopt the row that wasn't there before we started.
+    //
+    // Live-hit 2026-08-27 (run 2): Maha replied "تم الحفظ ✅ … 4 قواعد نشطة" and the
+    // count really did go 3 -> 4, but it had silently dropped the `[MARKER]` prefix
+    // while saving, so no marker lookup could ever find the rule. ETM-0 failed with
+    // `tracked` still null, cleanup therefore had no handle at all and reported
+    // "already-gone", and the rule was orphaned on dev — where it then polluted the
+    // NEXT run's baseline. Diffing against the pre-save snapshot identifies the row
+    // we just created regardless of what Maha did to its text, which is the only
+    // handle that survives this.
+    if (!savedRow) {
+      const beforeIds = new Set(before.rows.map((r) => r.id));
+      const beforeTexts = new Set(before.rows.map((r) => r.text));
+      const created = saved.rows.filter((r) => !beforeIds.has(r.id) || !beforeTexts.has(r.text));
+      if (created.length === 1) {
+        savedRow = created[0];
+        console.warn(
+          `[ETM-0] marker "${MARKER}" was stripped during save; adopting the newly created ` +
+            `row (id=${savedRow.id}) as this run's rule so it stays trackable and cleanable.`
+        );
+      } else if (created.length > 1) {
+        console.warn(
+          `[ETM-0] marker missing and ${created.length} rows changed — cannot tell which is ours.`
+        );
+      }
+    }
+
     expect(
       savedRow,
       `setup could not save the ${MARKER} rule, so the rest of this suite has nothing to edit. ` +
@@ -439,7 +466,9 @@ test.describe.serial('ETM — expected_text_mismatch dead end (clinic 2886 repro
         tool: '(manual retry recovery probe)',
         trigger: '(not needed)',
         result: 'PASS',
-        evidence: 'ETM-1 landed on the first confirm — zero manual retry rounds needed.',
+        evidence:
+          'ETM-1 landed without needing any manual "try again" recovery. See ETM-1\'s own ' +
+          'confirm_rounds for whether it took one confirm or the legitimate second one.',
         confirmRoundsNeeded: 0,
       });
       return;
@@ -482,6 +511,13 @@ test.describe.serial('ETM — expected_text_mismatch dead end (clinic 2886 repro
   });
 
   test.afterAll(async ({ browser }) => {
+    // Hooks inherit the 90s per-test timeout from playwright.config.ts, and cleanup
+    // needs far more than that: up to 3 delete attempts, each a real Maha round trip
+    // (~20-45s) plus a reload and a settle wait. Live-hit 2026-08-27 run 1 — the hook
+    // blew the 90s budget and was reported as a FAILED ETM-2 even though all three
+    // tests had actually passed, and worse, it was cut off mid-delete so the test
+    // rule was at risk of being orphaned on dev again.
+    test.setTimeout(300_000);
     // Own context: the shared worker fixture may already be torn down by the
     // time afterAll runs, and leaving the marker behind would poison ETM-0's
     // baseline guard on the next run.
