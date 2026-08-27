@@ -203,7 +203,7 @@ export async function waitForPanelCondition(
  * Playwright ties `page.waitForTimeout` to the current runnable, so it throws
  * "page.waitForTimeout: Test ended." once the owning test has finished — which is
  * exactly when `test.afterAll` cleanup runs. Live-hit 2026-08-26: after ETM-1
- * failed, cleanup aborted on the very first wait and left the `[ETM_TEST_2026]`
+ * failed, cleanup aborted on the very first wait and left the test's own `ETM_TEST_*`
  * rule behind on dev for the next run to trip over. A cleanup path must not use
  * any test-lifecycle-bound API.
  */
@@ -229,7 +229,7 @@ export async function readMarkerText(page: Page, marker: string): Promise<string
  * recognition.
  *
  * Why this is not just a marker substring (live-hit 2026-08-26, dev run 3): asked
- * to shorten the rule, Maha rewrote it and dropped the `[ETM_TEST_2026]` prefix
+ * to shorten the rule, Maha rewrote it and dropped the `ETM_TEST_*` prefix
  * along with everything else it considered filler. The suite then couldn't find
  * its own rule, ETM-0 failed on a null lookup, and ETM-1/ETM-2 never ran — a test
  * defect reported as an app failure.
@@ -305,7 +305,16 @@ export async function deleteTrackedRule(
     const state = await getInstructionPanelState(page);
     const byMarker = state.rows.find((r) => r.text.includes(marker));
     const byPosition = tracked ? state.rows.find((r) => r.id === tracked.id) : undefined;
-    const target = byMarker ?? (tracked && byPosition?.text === tracked.text ? byPosition : undefined);
+    // Third tier — match the last known wording anywhere in the list, regardless of
+    // position. This is what catches the orphan case: Maha rewrote the rule, stripped
+    // the marker, AND the list length changed, so neither of the first two handles
+    // resolves. Found live on 2026-08-26 — two such orphans had accumulated on dev
+    // clinic 440 (Arabic brevity rules with the marker gone), and they were what made
+    // a later run's ETM-0 merge into an existing rule instead of adding a new one
+    // ("أصبحت مكررة"), which is how a test leftover turned into a bogus NEEDS_REVIEW.
+    const byText = tracked ? state.rows.find((r) => r.text === tracked.text) : undefined;
+    const target =
+      byMarker ?? (tracked && byPosition?.text === tracked.text ? byPosition : undefined) ?? byText;
 
     if (!target) {
       return { success: true, via: attempt === 1 ? 'already-gone' : `attempt:${attempt - 1}` };
@@ -314,6 +323,7 @@ export async function deleteTrackedRule(
     const request = byMarker
       ? `احذفي القاعدة اللي فيها كلمة ${marker}`
       : `احذفي القاعدة رقم ${target.id}`;
+    const via = byMarker ? 'marker' : byPosition === target ? 'position' : 'text';
 
     try {
       await sendAndConfirm(page, request);
@@ -330,7 +340,7 @@ export async function deleteTrackedRule(
     // Verify by the rule's own text being gone, not by the count dropping — a
     // count drop alone could mean some OTHER rule was removed.
     if (!after.rows.some((r) => r.text === target.text)) {
-      return { success: true, via: byMarker ? `marker:${attempt}` : `position:${target.id}` };
+      return { success: true, via: `${via}:${attempt}` };
     }
   }
 

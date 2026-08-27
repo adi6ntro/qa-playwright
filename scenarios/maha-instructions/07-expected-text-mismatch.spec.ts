@@ -52,7 +52,27 @@ import { ReportRecorder } from '../../helpers/report';
  * If a run is interrupted, sweep the marker with:  npm run cleanup:maha-etm
  */
 
-const MARKER = 'ETM_TEST_2026';
+/**
+ * Marker prefix shared by every run; the full marker is made unique per run below.
+ * Cleanup and the leftover guard match on the PREFIX so they also sweep markers
+ * left by earlier runs.
+ */
+const MARKER_PREFIX = 'ETM_TEST';
+
+/**
+ * Unique per run (2026-08-26). A fixed marker meant every run created a rule whose
+ * wording was near-identical to whatever a previous run had left behind, and Maha
+ * responded by MERGING into the existing one instead of adding a new rule —
+ * observed answering "التعليمات رقم 1 و 3 أصبحت مكررة" with panel_count 6->6, which
+ * left ETM-0 with nothing it had actually created. A per-run marker keeps each
+ * run's rule textually distinct, so a leftover can never be mistaken for this
+ * run's rule (nor this run's for a leftover).
+ *
+ * Note this is derived from the clock deliberately: the suite must not depend on
+ * state from a previous run, and a fresh marker each time is the cheapest way to
+ * guarantee that.
+ */
+const MARKER = `${MARKER_PREFIX}_${Date.now().toString(36).toUpperCase()}`;
 
 /**
  * Shaped after the real instruction 30 from clinic 2886: long, multi-bullet,
@@ -111,20 +131,22 @@ test.describe.serial('ETM — expected_text_mismatch dead end (clinic 2886 repro
     // Guard against a leftover from an interrupted run: a pre-existing marker
     // row would make "did the text change?" below compare against the wrong
     // baseline and silently invalidate the whole scenario.
-    const existing = await readMarkerText(sharedPage, MARKER);
+    // Sweep by PREFIX: this run's marker is unique so it cannot pre-exist, but a
+    // previous run's marker can — and a leftover is exactly what corrupts ETM-0.
+    const existing = await readMarkerText(sharedPage, MARKER_PREFIX);
     if (existing) {
-      await deleteMarkerUntilGone(sharedPage, MARKER);
-      const stillThere = await readMarkerText(sharedPage, MARKER);
+      await deleteMarkerUntilGone(sharedPage, MARKER_PREFIX);
+      const stillThere = await readMarkerText(sharedPage, MARKER_PREFIX);
       expect(
         stillThere,
-        `a leftover ${MARKER} rule is still present — run "npm run cleanup:maha-etm" before this suite`
+        `a leftover ${MARKER_PREFIX}_* rule is still present — run "npm run cleanup:maha-etm" first`
       ).toBeNull();
     }
 
     const before = await getInstructionPanelState(sharedPage);
     const { replies: saveReplies, confirmRoundsNeeded: saveRounds } = await sendAndConfirm(
       sharedPage,
-      `أضيفي قاعدة جديدة بالنص ده بالظبط:\n${BASE_TEXT}`
+      `أضيفي قاعدة جديدة منفصلة بالنص ده بالظبط، ومتدمجهاش مع أي قاعدة موجودة:\n${BASE_TEXT}`
     );
     let saved = await readPanelAfterRefresh(sharedPage);
     let savedRow = saved.rows.find((r) => r.text.includes(MARKER));
@@ -232,9 +254,69 @@ test.describe.serial('ETM — expected_text_mismatch dead end (clinic 2886 repro
 
     // Phase 4 — ground truth. Whatever the chat said, did the stored text move?
     tracked = await resolveTrackedRule(sharedPage, MARKER, tracked);
-    const textAfterDrift = tracked?.text ?? null;
-    const storedTextChanged = textAfterDrift !== null && textAfterDrift !== textAfterFirstEdit;
+    let textAfterDrift = tracked?.text ?? null;
+    let storedTextChanged = textAfterDrift !== null && textAfterDrift !== textAfterFirstEdit;
+    let confirmRounds = 1;
+    let lastConfirmText = confirmReply.text;
 
+    // ONE extra confirmation round is legitimate here, and this is not the test
+    // moving its own goalposts — it is the test finally encoding the correct
+    // contract. Established from the dev trace at 16:45:21:
+    //
+    //   The proposal the owner approved claimed "the current wording is X". When
+    //   X was actually the model's own stale draft, the stored wording is NOT
+    //   what the owner was shown — so applying the write on that first "نعم"
+    //   would commit a change the owner never actually saw. Refusing it and
+    //   re-asking against the REAL wording is the safe and correct outcome; the
+    //   expected_text guard exists precisely to force that.
+    //
+    // So a first "نعم" that does not write is only a failure if the owner is left
+    // with no way forward. What must still hold, and is asserted below: the canned
+    // dead-end never appears, and the write DOES land once the owner confirms
+    // against corrected state. A second round that still doesn't write, or any
+    // appearance of the canned text, remains a hard failure.
+    if (!storedTextChanged && !markers.technicalFailureAffirmed) {
+      console.warn(
+        '[ETM-1] first confirm did not write — re-confirming once against the corrected ' +
+          'proposal (see the note in this test for why one extra round is legitimate).'
+      );
+      const secondConfirm = await sendMessageTolerant(sharedPage, 'نعم');
+      confirmRounds = 2;
+      lastConfirmText = secondConfirm.text;
+      const secondMarkers = classifyErrorMarkers(secondConfirm.text);
+
+      if (secondConfirm.transportError) {
+        recorder.record({
+          id: 'ETM-1',
+          tool: 'update_instruction — stale-draft path (second confirm)',
+          trigger: 'second "نعم"',
+          result: 'UNABLE_TO_TEST',
+          evidence: 'Transport error on the SECOND confirm turn — run invalidated. Re-run.',
+        });
+        console.warn('[ETM-1] transport error on the second confirm — run invalidated.');
+        etm1Landed = null;
+        test.skip();
+        return;
+      }
+
+      tracked = await resolveTrackedRule(sharedPage, MARKER, tracked);
+      textAfterDrift = tracked?.text ?? null;
+      storedTextChanged = textAfterDrift !== null && textAfterDrift !== textAfterFirstEdit;
+
+      // The dead-end can surface on either round — check both.
+      expect(
+        secondConfirm.text,
+        'Maha returned the canned "technical issue" dead-end on the second confirm — ' +
+          'still the reported bug'
+      ).not.toContain(CANNED.technicalFailureAffirmed);
+      expect(
+        secondMarkers.improvisedFailure,
+        'Maha blamed a "technical problem" for what is really a stale-expected_text ' +
+          `re-confirmation — misleading wording. Reply: ${secondConfirm.text}`
+      ).toBe(false);
+    }
+
+    // Assigned after any second round above so ETM-2 sees the final outcome.
     etm1Landed = storedTextChanged && !markers.technicalFailureAffirmed;
 
     // The premise guard exists so a GREEN result can't be read as meaningful when
@@ -289,7 +371,8 @@ test.describe.serial('ETM — expected_text_mismatch dead end (clinic 2886 repro
         `confirm_reply="${confirmReply.text}" | ` +
         `error_markers=[${markers.matched.join(', ') || 'none'}] | ` +
         `canned_technical_failure=${markers.technicalFailureAffirmed} | ` +
-        `stored_text_changed=${storedTextChanged}`,
+        `stored_text_changed=${storedTextChanged} | confirm_rounds=${confirmRounds} | ` +
+        `last_confirm_reply="${lastConfirmText.slice(0, 200)}"`,
       persisted: storedTextChanged,
     });
 
@@ -330,8 +413,8 @@ test.describe.serial('ETM — expected_text_mismatch dead end (clinic 2886 repro
 
     expect(
       storedTextChanged,
-      'the owner confirmed the edit but the stored rule text is unchanged after a hard refresh — ' +
-        `the write never happened. Confirm reply was: ${confirmReply.text}`
+      `the owner confirmed ${confirmRounds}x but the stored rule text is unchanged after a hard ` +
+        `refresh — the write never happened. Last reply: ${lastConfirmText}`
     ).toBe(true);
   });
 

@@ -92,7 +92,7 @@ driving the real chat UI at `dev.reporty.sa/customer/my-clinic` → MyFacility
 
   The suite tracks its rule by marker **and** by panel position, because Maha
   rewrites the rule when asked to shorten it and has been observed dropping the
-  `[ETM_TEST_2026]` marker along with the rest of the "filler". Position alone
+  the marker along with the rest of the "filler". Position alone
   isn't safe either (`fo-irow-<id>` renders a 1-based POSITION, which shifts when
   any earlier rule is added or removed), so the positional fallback is only
   trusted while the panel count is unchanged. If both handles are lost the run
@@ -106,8 +106,9 @@ driving the real chat UI at `dev.reporty.sa/customer/my-clinic` → MyFacility
 - **`01-cleanup-leftover-markers.spec.ts`:** sweeps up `[BUG005_TEST_*]`
   marker rules left behind by interrupted runs of the above.
 - **`01b-cleanup-etm-marker.spec.ts`:** same, for the ETM suite's
-  `[ETM_TEST_2026]` marker. A leftover marker makes ETM-1 compare against the
-  wrong baseline, so clear it before re-running.
+  `ETM_TEST_*` markers (the suite mints a unique one per run). A leftover makes
+  ETM-0 merge into it instead of creating its own rule, so clear it before
+  re-running.
 
 Results here are mostly `NEEDS_REVIEW`, not `PASS`/`FAIL` — a script can
 tell you "the count didn't move" or "the value reverted after refresh", not
@@ -159,7 +160,7 @@ npm run test:maha-negative    # error-handling scenarios
 npm run test:maha-etm         # expected_text_mismatch repro (~10 real Maha turns, slow)
 npm run test:maha-all         # everything under maha-instructions/
 npm run cleanup:maha-bug005   # sweep leftover [BUG005_TEST_*] markers
-npm run cleanup:maha-etm      # sweep leftover [ETM_TEST_2026] markers
+npm run cleanup:maha-etm      # sweep leftover ETM_TEST_* markers
 
 npm run test:all              # absolutely everything (both suites)
 npm run report                # open the HTML report for the last run
