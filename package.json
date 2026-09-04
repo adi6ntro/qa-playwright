@@ -4,6 +4,14 @@
   "type": "module",
   "scripts": {
     "login-setup": "playwright test auth/login-setup.ts --project=setup",
+    "login-setup:ba": "LOGIN_PROFILE=ba playwright test auth/login-setup.ts --project=setup",
+    "login-setup:orphan": "LOGIN_PROFILE=orphan playwright test auth/login-setup.ts --project=setup",
+
+    "test:ob4-part3": "playwright test scenarios/ob4-crm-export/01-part3-runtime-context.spec.ts",
+    "test:ob4-part3b": "playwright test scenarios/ob4-crm-export/02-part3b-compatibility.spec.ts",
+    "test:ob4-mdtbl": "playwright test scenarios/ob4-crm-export/03-markdown-table-rendering.spec.ts",
+    "test:ob4-crm08-stub": "playwright test scenarios/ob4-crm-export/04-crm08-consent-stub.spec.ts",
+    "test:ob4-all": "playwright test scenarios/ob4-crm-export/",
 
     "test:inbox": "playwright test scenarios/inbox-marketing/01-inbox.spec.ts",
     "test:marketing": "playwright test scenarios/inbox-marketing/02-marketing-templates.spec.ts",

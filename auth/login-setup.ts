@@ -14,15 +14,29 @@ import 'dotenv/config';
  *
  * Run with: npm run login-setup
  * (re-run whenever auth/.storage-state.json goes stale / session expires)
+ *
+ * Multi-account support (added for scenarios/ob4-crm-export/, which needs a
+ * real branch_admin session and a real "orphaned staff" session — role_id=2
+ * with parent_user_id NOT matching any clinic — to exercise role-scoping
+ * checks; a single SA session can't cover those):
+ *   LOGIN_PROFILE=ba      npm run login-setup   → reads LOGIN_EMAIL_BA/LOGIN_PASSWORD_BA,
+ *                                                  saves auth/.storage-state.ba.json
+ *   LOGIN_PROFILE=orphan  npm run login-setup   → reads LOGIN_EMAIL_ORPHAN/LOGIN_PASSWORD_ORPHAN,
+ *                                                  saves auth/.storage-state.orphan.json
+ * Default (LOGIN_PROFILE unset) is unchanged: LOGIN_EMAIL/LOGIN_PASSWORD →
+ * auth/.storage-state.json.
  */
 test('log in to dev.reporty.sa and save session state', async ({ page }) => {
   test.setTimeout(5 * 60 * 1000); // generous — this may involve a human
 
-  const email = process.env.LOGIN_EMAIL;
-  const password = process.env.LOGIN_PASSWORD;
+  const profile = process.env.LOGIN_PROFILE?.trim().toLowerCase() || '';
+  const suffix = profile ? `_${profile.toUpperCase()}` : '';
+  const email = process.env[`LOGIN_EMAIL${suffix}`];
+  const password = process.env[`LOGIN_PASSWORD${suffix}`];
+  const storagePath = profile ? `auth/.storage-state.${profile}.json` : 'auth/.storage-state.json';
   if (!email || !password) {
     throw new Error(
-      'LOGIN_EMAIL / LOGIN_PASSWORD not set. Copy .env.example to .env and fill them in.'
+      `LOGIN_EMAIL${suffix} / LOGIN_PASSWORD${suffix} not set. Copy .env.example to .env and fill them in.`
     );
   }
 
@@ -57,6 +71,6 @@ test('log in to dev.reporty.sa and save session state', async ({ page }) => {
     );
   }
 
-  await page.context().storageState({ path: 'auth/.storage-state.json' });
-  console.log('[login-setup] Session saved to auth/.storage-state.json');
+  await page.context().storageState({ path: storagePath });
+  console.log(`[login-setup] Session saved to ${storagePath}`);
 });
