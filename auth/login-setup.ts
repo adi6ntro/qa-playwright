@@ -25,15 +25,34 @@ import 'dotenv/config';
  *                                                  saves auth/.storage-state.orphan.json
  * Default (LOGIN_PROFILE unset) is unchanged: LOGIN_EMAIL/LOGIN_PASSWORD →
  * auth/.storage-state.json.
+ *
+ * Local-target support (scenarios/ob4-crm-export/ must run against a local
+ * reporty-web-backup, not dev.reporty.sa — see helpers/ob4-local-guard.ts for
+ * why). Session cookies are domain-scoped, so a dev.reporty.sa session can't
+ * be reused against localhost — this needs its own login, saved to its own
+ * file. Detected automatically from BASE_URL, no separate flag needed:
+ *   BASE_URL=http://localhost:8000 npm run login-setup
+ *     → saves auth/.storage-state.local.json
+ *   BASE_URL=http://localhost:8000 LOGIN_PROFILE=ba npm run login-setup
+ *     → saves auth/.storage-state.ba.local.json
+ * (the npm run login-setup:local / :local-ba / :local-orphan scripts set
+ * BASE_URL for you — see package.json)
  */
-test('log in to dev.reporty.sa and save session state', async ({ page }) => {
+test('log in and save session state', async ({ page }) => {
   test.setTimeout(5 * 60 * 1000); // generous — this may involve a human
 
   const profile = process.env.LOGIN_PROFILE?.trim().toLowerCase() || '';
   const suffix = profile ? `_${profile.toUpperCase()}` : '';
   const email = process.env[`LOGIN_EMAIL${suffix}`];
   const password = process.env[`LOGIN_PASSWORD${suffix}`];
-  const storagePath = profile ? `auth/.storage-state.${profile}.json` : 'auth/.storage-state.json';
+
+  const baseURL = process.env.BASE_URL || '';
+  const isLocal = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?\/?$/i.test(baseURL);
+  const pathParts = ['auth/.storage-state'];
+  if (profile) pathParts.push(profile);
+  if (isLocal) pathParts.push('local');
+  const storagePath = `${pathParts.join('.')}.json`;
+
   if (!email || !password) {
     throw new Error(
       `LOGIN_EMAIL${suffix} / LOGIN_PASSWORD${suffix} not set. Copy .env.example to .env and fill them in.`

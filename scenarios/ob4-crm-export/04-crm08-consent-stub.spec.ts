@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { gotoAiInstructionStep, sendMessage } from '../../helpers/maha-chat';
 import { ReportRecorder } from '../../helpers/report';
+import '../../helpers/ob4-local-guard'; // throws if BASE_URL isn't local — see that file for why
 
 /**
  * Covers the CRM-08 stub-honesty checks from
@@ -26,10 +27,10 @@ test.describe('TC-CRM08-STUB-01 — with `crm` capability on, stub is honest abo
   test('Maha admits consent recording is not available yet, without leaking the raw error string', async ({ browser }) => {
     test.skip(
       process.env.TEST_CRM_CAPABILITY_ENABLED !== '1',
-      'Set TEST_CRM_CAPABILITY_ENABLED=1 only after a dev has manually enabled ' +
-        '"phase4Capabilities": {"crm": "*"} (or this test clinic\'s id) in config.json.'
+      'Set TEST_CRM_CAPABILITY_ENABLED=1 only after manually enabling "phase4Capabilities": {"crm": "*"} ' +
+        '(or this test clinic\'s id) in your LOCAL reporty-onboard-phase3 config.json and restarting app.py.'
     );
-    const context = await browser.newContext({ storageState: 'auth/.storage-state.json' });
+    const context = await browser.newContext({ storageState: 'auth/.storage-state.local.json' });
     const page = await context.newPage();
     await gotoAiInstructionStep(page);
 
@@ -57,7 +58,7 @@ test.describe('TC-CRM08-STUB-01 — with `crm` capability on, stub is honest abo
 // Always runnable, no special setup.
 test.describe('TC-CRM08-STUB-02 — with `crm` off (default today), no regression', () => {
   test('consent-related chat behaves like plain Phase 3 — no crm_record_consent involvement', async ({ browser }) => {
-    const context = await browser.newContext({ storageState: 'auth/.storage-state.json' });
+    const context = await browser.newContext({ storageState: 'auth/.storage-state.local.json' });
     const page = await context.newPage();
     await gotoAiInstructionStep(page);
 
@@ -70,9 +71,10 @@ test.describe('TC-CRM08-STUB-02 — with `crm` off (default today), no regressio
       trigger,
       result: 'NEEDS_REVIEW',
       evidence:
-        `${reply.text}\n\n[Manual cross-check needed — this is the actual assertion] grep the OB4 python log ` +
-        `for this session's select_tools() output and confirm crm_record_consent never appears in the Gemini ` +
-        `tool schema.`,
+        `${reply.text}\n\n[Manual cross-check needed — this is the actual assertion] add a temporary ` +
+        `logger.info("tools for clinic %s: %s", clinic_id, [t['name'] for t in tools]) after the ` +
+        `select_tools() call in inapp_agent/orchestrators/maha_inapp_agent.py (~line 4770), restart your ` +
+        `local app.py, re-run, and confirm crm_record_consent never appears in the logged tool list.`,
     });
     expect(reply.text.length).toBeGreaterThan(0);
     await context.close();

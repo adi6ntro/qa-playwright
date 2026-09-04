@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { gotoAiInstructionStep, sendMessage } from '../../helpers/maha-chat';
 import { ReportRecorder } from '../../helpers/report';
+import '../../helpers/ob4-local-guard'; // throws if BASE_URL isn't local — see that file for why
 
 /**
  * Covers Part 3b — Phase 3 Compatibility Guarantee, from
@@ -46,7 +47,7 @@ test.describe('TC-PH3C-01 — full Phase 3 regression', () => {
 // shouldn't produce unprompted).
 test.describe('TC-PH3C-02 — zero Phase 4 tools reach the schema when capabilities are off', () => {
   test('ordinary chat behaves like Phase 3 only; log cross-check required for the schema claim', async ({ browser }) => {
-    const context = await browser.newContext({ storageState: 'auth/.storage-state.json' });
+    const context = await browser.newContext({ storageState: 'auth/.storage-state.local.json' });
     const page = await context.newPage();
     await gotoAiInstructionStep(page);
 
@@ -57,9 +58,11 @@ test.describe('TC-PH3C-02 — zero Phase 4 tools reach the schema when capabilit
       trigger: 'اعرضي لي كل إعدادات المنشأة',
       result: 'NEEDS_REVIEW',
       evidence:
-        `${reply.text}\n\n[Manual cross-check needed — this is the actual assertion] grep the OB4 python log ` +
-        `for this session's select_tools()/enabled_capabilities() output and confirm it contains ONLY Phase 3 ` +
-        `tools — zero tools from crm/export/staff_reminders/template_studio/charts.`,
+        `${reply.text}\n\n[Manual cross-check needed — this is the actual assertion] no eligible log line ` +
+        `exists by default — add a temporary logger.info("tools for clinic %s: %s", clinic_id, [t['name'] ` +
+        `for t in tools]) right after the select_tools() call in inapp_agent/orchestrators/` +
+        `maha_inapp_agent.py (~line 4770), restart your local app.py, re-run, then confirm the logged tool ` +
+        `list contains ONLY Phase 3 tools — zero from crm/export/staff_reminders/template_studio/charts.`,
     });
     expect(reply.text.length).toBeGreaterThan(0);
     await context.close();
@@ -67,20 +70,22 @@ test.describe('TC-PH3C-02 — zero Phase 4 tools reach the schema when capabilit
 });
 
 // TC-PH3C-03 — per-clinic capability isolation (clinic A gets `export`
-// enabled, clinic B must not see it leak). Requires a dev to edit config.json
-// scoped to one specific test clinic id — same reasoning as TC-P3-06, this
-// suite doesn't own that config file and shouldn't edit it unattended.
+// enabled, clinic B must not see it leak). Requires editing config.json
+// scoped to one specific test clinic id + a service restart — same reasoning
+// as TC-P3-06: safe to do by hand now that this suite is local-only, but
+// still not something a Playwright script should do itself.
 test.describe('TC-PH3C-03 — per-clinic capability isolation', () => {
-  test('requires manual config.json edit scoped to one test clinic — not exercised by this suite', async () => {
+  test('requires manual local config.json edit scoped to one test clinic — not exercised by this suite', async () => {
     recorder.record({
       id: 'TC-PH3C-03',
       tool: 'capability gating (per-clinic isolation)',
       trigger: '(manual only)',
       result: 'UNABLE_TO_TEST',
       evidence:
-        'Requires a dev to enable one capability group (e.g. "export": ["clinic_id_A"]) for a single test ' +
-        "clinic in config.json, then confirm clinic B (not listed) still behaves Phase-3-only. Same reasoning " +
-        'as TC-P3-06 — editing the shared config.json isn\'t something this automated suite should do.',
+        'On your LOCAL reporty-onboard-phase3 checkout: enable one capability group (e.g. "export": ' +
+        '["clinic_id_A"]) for a single test clinic in config.json, restart app.py, then confirm clinic B ' +
+        '(not listed) still behaves Phase-3-only. Same reasoning as TC-P3-06 — editing a config file + ' +
+        "restarting a process isn't something this automated suite should do, even locally.",
     });
     test.skip(true, 'manual-only precondition, see evidence');
   });

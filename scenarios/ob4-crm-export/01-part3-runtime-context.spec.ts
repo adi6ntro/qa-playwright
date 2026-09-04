@@ -1,6 +1,7 @@
 import { test as base, expect } from '@playwright/test';
 import { gotoAiInstructionStep, sendMessage } from '../../helpers/maha-chat';
 import { ReportRecorder } from '../../helpers/report';
+import '../../helpers/ob4-local-guard'; // throws if BASE_URL isn't local — see that file for why
 
 /**
  * Covers Part 3 — Runtime Context Propagation, from
@@ -27,6 +28,14 @@ import { ReportRecorder } from '../../helpers/report';
  * script cannot see. Those checks are recorded NEEDS_REVIEW with the reply
  * captured as evidence, plus the log grep to cross-check manually — same
  * discipline as scenarios/maha-instructions/02-section-a-reads.spec.ts.
+ *
+ * `_fetch_branch_context()`/`_empty_branch_context()` (utils/db.py) don't log
+ * their resolved user_role/branch_count/acting_user_id by default — per the
+ * QA doc's own note, add a temporary `logger.info("ctx resolved: %s", ctx)`
+ * right after `ctx = get_clinic_context(clinic_id, branch_id, acting_user_id)`
+ * in `inapp_agent/orchestrators/maha_inapp_agent.py` (~line 5052), then
+ * restart your local `app.py`, before trusting any NEEDS_REVIEW result below
+ * that says "grep the OB4 python log".
  */
 
 const recorder = new ReportRecorder('OB4 Part 3 - Runtime Context Propagation');
@@ -38,7 +47,7 @@ base.afterAll(async () => {
 // TC-P3-01 — SA, default single-branch account, ordinary Phase 3 chat.
 base.describe('TC-P3-01 — SA baseline Phase 3 chat still works', () => {
   base('SA: ordinary instruction add does not error', async ({ browser }) => {
-    const context = await browser.newContext({ storageState: 'auth/.storage-state.json' });
+    const context = await browser.newContext({ storageState: 'auth/.storage-state.local.json' });
     const page = await context.newPage();
     await gotoAiInstructionStep(page);
 
@@ -58,14 +67,14 @@ base.describe('TC-P3-01 — SA baseline Phase 3 chat still works', () => {
 });
 
 // TC-P3-02 — real branch_admin (BA) account. Needs LOGIN_EMAIL_BA/LOGIN_PASSWORD_BA
-// + `LOGIN_PROFILE=ba npm run login-setup` to have been run once.
+// + `npm run login-setup:local-ba` to have been run once.
 base.describe('TC-P3-02 — BA runtime context resolves correctly', () => {
   base('BA: acting_user_id/user_role resolve to the staff, not the owner', async ({ browser }) => {
     base.skip(
       !process.env.LOGIN_EMAIL_BA,
-      'Set LOGIN_EMAIL_BA/LOGIN_PASSWORD_BA in .env and run `LOGIN_PROFILE=ba npm run login-setup` to enable this test.'
+      'Set LOGIN_EMAIL_BA/LOGIN_PASSWORD_BA in .env and run `npm run login-setup:local-ba` to enable this test.'
     );
-    const context = await browser.newContext({ storageState: 'auth/.storage-state.ba.json' });
+    const context = await browser.newContext({ storageState: 'auth/.storage-state.ba.local.json' });
     const page = await context.newPage();
     await gotoAiInstructionStep(page);
 
@@ -89,7 +98,7 @@ base.describe('TC-P3-02 — BA runtime context resolves correctly', () => {
 // field names like managed_branch_ids verbatim — that part IS checkable.
 base.describe('TC-P3-03 — Maha describes role/branch coherently, no raw internal dump', () => {
   base('SA: role/branch question gets a natural answer, not a JSON dump', async ({ browser }) => {
-    const context = await browser.newContext({ storageState: 'auth/.storage-state.json' });
+    const context = await browser.newContext({ storageState: 'auth/.storage-state.local.json' });
     const page = await context.newPage();
     await gotoAiInstructionStep(page);
 
@@ -118,9 +127,9 @@ base.describe('TC-P3-04 — orphaned staff degrades to doctor, never escalates',
       !process.env.LOGIN_EMAIL_ORPHAN,
       'Set LOGIN_EMAIL_ORPHAN/LOGIN_PASSWORD_ORPHAN in .env (account must have users.role_id=2 with a ' +
         'parent_user_id that matches no valid clinic — create manually per TC-P3-04 precondition) and run ' +
-        '`LOGIN_PROFILE=orphan npm run login-setup` to enable this test.'
+        '`npm run login-setup:local-orphan` to enable this test.'
     );
-    const context = await browser.newContext({ storageState: 'auth/.storage-state.orphan.json' });
+    const context = await browser.newContext({ storageState: 'auth/.storage-state.orphan.local.json' });
     const page = await context.newPage();
     await gotoAiInstructionStep(page);
 
@@ -152,7 +161,7 @@ base.describe('TC-P3-04 — orphaned staff degrades to doctor, never escalates',
 // fields, this stops proving what it currently proves.
 base.describe('TC-P3-05 — server ignores client-supplied identity fields', () => {
   base('spoofed acting_user_id/user_id/is_admin in the POST body has no effect', async ({ browser }) => {
-    const context = await browser.newContext({ storageState: 'auth/.storage-state.json' });
+    const context = await browser.newContext({ storageState: 'auth/.storage-state.local.json' });
     const page = await context.newPage();
     await gotoAiInstructionStep(page);
 
@@ -186,25 +195,28 @@ base.describe('TC-P3-05 — server ignores client-supplied identity fields', () 
   });
 });
 
-// TC-P3-06 — dev deliberately adds an unknown/typo'd capability key to
-// config.json. Editing that shared config file from an automated test is not
-// something this suite should do (it's not scoped to a single test clinic and
-// isn't safely revertible from here) — this stays a documented manual
-// precondition, same treatment as TC-P3-02/04's account setup.
+// TC-P3-06 — deliberately adds an unknown/typo'd capability key to
+// config.json and restarts the OB4 service to pick it up. Now that this
+// suite is local-only (helpers/ob4-local-guard.ts), that's YOUR local
+// config.json/service — safe to edit by hand. Still not something this
+// script does for you: editing a config file + restarting a process isn't a
+// Playwright concern, and there's no per-clinic override endpoint yet to
+// automate it through instead.
 base.describe('TC-P3-06 — unknown capability key fails closed', () => {
-  base('requires manual config.json edit — not exercised by this suite', async () => {
+  base('requires manual local config.json edit + service restart — not exercised by this suite', async () => {
     recorder.record({
       id: 'TC-P3-06',
       tool: 'capability gating (fail-closed on unknown key)',
       trigger: '(manual only)',
       result: 'UNABLE_TO_TEST',
       evidence:
-        'Requires a dev to manually add an unrecognized key (e.g. "phase4Capabilities": {"crmm": "*"}) to ' +
-        "config.json for a specific test clinic, then chat as that clinic's owner and confirm (a) no error, " +
-        '(b) an "unknown capability" warning is logged, (c) no Phase 4 tool leaks into the schema. Editing ' +
-        "the shared config.json isn't something this automated suite should do — run manually per the test " +
-        'script, or promote to automation once a per-clinic capability override exists that a test can set ' +
-        'and revert safely via API instead of editing the file directly.',
+        'On your LOCAL reporty-onboard-phase3 checkout: add an unrecognized key (e.g. "phase4Capabilities": ' +
+        '{"crmm": "*"}) to config.json, restart `.venv/bin/python app.py`, then chat as any clinic owner and ' +
+        'confirm (a) no error, (b) capabilities.py\'s is_enabled() logs an "unknown capability" WARNING to ' +
+        "stdout (already exists in code, ~line 67-71 — no temp logging needed), (c) no Phase 4 tool leaks " +
+        'into the schema. This remains a manual step (editing a file + restarting a process isn\'t something ' +
+        'a Playwright script should do) — just no longer unsafe now that it targets your own local checkout ' +
+        'instead of the shared dev server.',
     });
     base.skip(true, 'manual-only precondition, see evidence');
   });

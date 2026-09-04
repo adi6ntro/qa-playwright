@@ -121,6 +121,73 @@ without them, some tests skip or don't revert to baseline. Keep
 `ALLOW_DESTRUCTIVE_RESET=0` unless you specifically mean to run the
 reset-to-baseline test in Section B.
 
+### 3. OB4 / Phase 4 CRM+Export — `scenarios/ob4-crm-export/`
+
+Automates `QA_TestScript_Phase4_CRM_Export.md` (reporty-web-backup repo
+root) — but **only** the sections that doc's own status table marks
+"Sudah dibangun" as of 2026-09-04: Part 3 (runtime context propagation),
+Part 3b (Phase 3 compatibility guarantee), the markdown-table rendering
+addendum, and the CRM-08 `crm_record_consent` STUB honesty check. The other
+~117 test cases in that doc (CRM-01..12 real tools, EXP-01..08, RMD-01..04,
+DSP-01, TPL-01/02, UAP-01..04) are unimplemented backend work with no spec
+files here yet — write them once each tool actually ships.
+
+**Local-only, by design — this suite will not run against dev.reporty.sa.**
+`helpers/ob4-local-guard.ts` throws at file-load time unless `BASE_URL` is a
+local host. Several test cases (TC-P3-06, TC-PH3C-02/03, TC-CRM08-STUB-01)
+require editing `config.json` and restarting the `reporty-onboard-phase3`
+Python service to pick up a log line or a capability flag — doing that
+against the shared dev server would disrupt it for everyone else. Required
+local setup (`reference-onboard-phase3-local-integration-setup` has the full
+writeup and gotchas):
+1. `reporty-web-backup`: `php artisan serve --port=8000`
+2. `reporty-onboard-phase3`: `.venv/bin/python app.py` (port 9559 —
+   reporty-web-backup's `.env` needs `ONBOARDING_SERVICE_URL=
+   http://localhost:9559`; the `config/services.php` fallback is a
+   different, wrong port)
+
+Both point at the same real dev DB — only the app/service layer is local,
+not the data.
+
+**Channel correction vs. the source doc:** that doc's default test channel,
+the "My Clinic AI" widget (`MyClinicAiController::chat()` /
+`myClinic/chat.blade.php`), turned out to be disabled dead UI wired to an
+unrelated, non-Phase4 AI service (confirmed 2026-09-04 by reading
+`myClinic.blade.php`, which unconditionally hides that panel). This suite
+targets the AI Instruction wizard step instead — the one
+`scenarios/maha-instructions/` already drives — which is the actual live
+Phase4 chat surface (`OnboardingService` → `reporty-onboard-phase3`).
+
+- **Sessions are separate from the other two suites.** Cookies are
+  domain-scoped, so a dev.reporty.sa session can't be reused against
+  localhost. Run `npm run login-setup:local` (and `:local-ba` /
+  `:local-orphan` for the two extra accounts below) — these save to
+  `auth/.storage-state.local.json` etc., distinct from the plain
+  `.storage-state.json` the other suites use.
+- **TC-P3-02** needs a real branch_admin (BA) account — create one via the
+  product's own "My Doctors" flow, not by hand in the DB (see the test
+  script's own setup steps). **TC-P3-04** needs a deliberately malformed
+  "orphaned staff" account (`role_id=2`, `parent_user_id` matching no valid
+  clinic) — there's no safe way for this suite to create that row itself, so
+  it's a manual DB setup step. Both are env-gated (`LOGIN_EMAIL_BA`/
+  `LOGIN_EMAIL_ORPHAN` in `.env`) and skip with a clear message if unset.
+- Most Expected Results in Part 3/3b require reading the OB4 Python
+  backend's logs (`user_role`/`acting_user_id` resolution, the tool schema
+  sent to Gemini) — signals a browser script can't see. Those are recorded
+  `NEEDS_REVIEW` with the chat reply captured as evidence, plus the exact
+  temporary `logger.info(...)` line and file/location to add (per the test
+  script's own "Cara A/B" notes) so the manual cross-check is a copy-paste,
+  not a hunt.
+- **TC-P3-05** (payload-spoofing / identity-escalation check) is fully
+  mechanical — it's a live regression guard confirming
+  `MyClinicAiController::foChat()` still resolves identity from `Auth::id()`
+  server-side and never trusts client-supplied `acting_user_id`/`user_id`
+  fields in the request body.
+- **TC-P3-06** and **TC-PH3C-03** (capability fail-closed / per-clinic
+  isolation) stay manual-only even locally — editing a config file and
+  restarting a process isn't something a Playwright script should do, it's
+  just no longer *unsafe* now that it targets your own local checkout.
+
 ## Setup
 
 ```bash
@@ -135,7 +202,20 @@ reCAPTCHA that can't be reliably solved unattended. It tries the normal
 email+password submit first; if that doesn't clear `/login` within 8
 seconds, it **pauses** so you can solve it by hand once, then click Resume
 in the Playwright Inspector. Session is saved to `auth/.storage-state.json`
-and reused by **both suites** — no repeated logins/captchas after that.
+and reused by **Inbox+Marketing and Maha AI Instructions** — no repeated
+logins/captchas after that.
+
+**OB4 (`scenarios/ob4-crm-export/`) needs its own, separate local session** —
+cookies are domain-scoped, so this dev.reporty.sa session can't be reused
+against localhost:
+```bash
+npm run login-setup:local          # SA account, against your local Laravel
+npm run login-setup:local-ba       # BA account (needs LOGIN_EMAIL_BA/PASSWORD_BA)
+npm run login-setup:local-orphan   # orphaned-staff account (needs LOGIN_EMAIL_ORPHAN/PASSWORD_ORPHAN)
+```
+These require your local `reporty-web-backup` (`php artisan serve --port=8000`)
+and local `reporty-onboard-phase3` (`.venv/bin/python app.py`) to already be
+running — see the OB4 suite section above.
 
 If `npx playwright install` can't reach `storage.googleapis.com` on your
 network, `playwright.config.ts` already falls back to the system-installed
@@ -162,7 +242,15 @@ npm run test:maha-all         # everything under maha-instructions/
 npm run cleanup:maha-bug005   # sweep leftover [BUG005_TEST_*] markers
 npm run cleanup:maha-etm      # sweep leftover ETM_TEST_* markers
 
-npm run test:all              # absolutely everything (both suites)
+# OB4 / Phase 4 CRM+Export — requires local Laravel + local reporty-onboard-phase3 running first
+npm run test:ob4-part3        # Part 3: runtime context propagation
+npm run test:ob4-part3b       # Part 3b: Phase 3 compatibility guarantee
+npm run test:ob4-mdtbl        # markdown table rendering addendum
+npm run test:ob4-crm08-stub   # CRM-08 consent-tool stub honesty check
+npm run test:ob4-all          # everything under ob4-crm-export/
+
+npm run test:all              # absolutely everything (all suites) — will FAIL on the OB4
+                               # files unless BASE_URL is also set to your local Laravel
 npm run report                # open the HTML report for the last run
 ```
 
@@ -182,6 +270,11 @@ npm run report                # open the HTML report for the last run
   real clinic's account, and never force the tools the runbook itself marks
   `UNABLE_TO_TEST` (owner-only actions, binary uploads, destructive actions
   without a burner clinic).
+- **`scenarios/ob4-crm-export/` must never run against dev.reporty.sa** —
+  `helpers/ob4-local-guard.ts` throws if `BASE_URL` isn't a local host. This
+  isn't a preference: some of its test cases require editing `config.json`
+  and restarting the shared `reporty-onboard-phase3` service, which would be
+  actively disruptive to anyone else using dev at the time.
 - Never point `BASE_URL` at production (`https://reporty.sa`). The Inbox/
   Marketing external API base the app itself talks to is a `-dev` host
   regardless, so there's no production-safe path through that feature yet.
