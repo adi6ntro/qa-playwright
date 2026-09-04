@@ -25,6 +25,9 @@ test.afterAll(async () => {
 // OFF everywhere, so this is env-gated and skips by default.
 test.describe('TC-CRM08-STUB-01 — with `crm` capability on, stub is honest about not_yet_available', () => {
   test('Maha admits consent recording is not available yet, without leaking the raw error string', async ({ browser }) => {
+    // See 01-part3-runtime-context.spec.ts's timeout comment — local dev needs more
+    // than the 90s default for a real wizard-load + chat-reply round trip.
+    test.setTimeout(180_000);
     test.skip(
       process.env.TEST_CRM_CAPABILITY_ENABLED !== '1',
       'Set TEST_CRM_CAPABILITY_ENABLED=1 only after manually enabling "phase4Capabilities": {"crm": "*"} ' +
@@ -58,6 +61,9 @@ test.describe('TC-CRM08-STUB-01 — with `crm` capability on, stub is honest abo
 // Always runnable, no special setup.
 test.describe('TC-CRM08-STUB-02 — with `crm` off (default today), no regression', () => {
   test('consent-related chat behaves like plain Phase 3 — no crm_record_consent involvement', async ({ browser }) => {
+    // See 01-part3-runtime-context.spec.ts's timeout comment — local dev needs more
+    // than the 90s default for a real wizard-load + chat-reply round trip.
+    test.setTimeout(180_000);
     const context = await browser.newContext({ storageState: 'auth/.storage-state.local.json' });
     const page = await context.newPage();
     await gotoAiInstructionStep(page);

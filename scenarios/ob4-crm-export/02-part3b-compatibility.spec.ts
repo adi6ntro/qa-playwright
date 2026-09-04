@@ -47,6 +47,9 @@ test.describe('TC-PH3C-01 — full Phase 3 regression', () => {
 // shouldn't produce unprompted).
 test.describe('TC-PH3C-02 — zero Phase 4 tools reach the schema when capabilities are off', () => {
   test('ordinary chat behaves like Phase 3 only; log cross-check required for the schema claim', async ({ browser }) => {
+    // See 01-part3-runtime-context.spec.ts's timeout comment — local dev needs more
+    // than the 90s default for a real wizard-load + chat-reply round trip.
+    test.setTimeout(180_000);
     const context = await browser.newContext({ storageState: 'auth/.storage-state.local.json' });
     const page = await context.newPage();
     await gotoAiInstructionStep(page);

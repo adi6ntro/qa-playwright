@@ -38,6 +38,9 @@ async function lastMahaBubbleTableInfo(page: import('@playwright/test').Page) {
 
 test.describe('TC-MDTBL-01 — markdown table renders as a real HTML table', () => {
   test('a reply asked to be tabular renders <table>, not raw pipe/dash text', async ({ browser }) => {
+    // See 01-part3-runtime-context.spec.ts's timeout comment — local dev needs more
+    // than the 90s default for a real wizard-load + chat-reply round trip.
+    test.setTimeout(180_000);
     const context = await browser.newContext({ storageState: 'auth/.storage-state.local.json' });
     const page = await context.newPage();
     await gotoAiInstructionStep(page);
@@ -74,6 +77,9 @@ test.describe('TC-MDTBL-01 — markdown table renders as a real HTML table', () 
 
 test.describe('TC-MDTBL-02 — special characters inside table cells do not break rendering', () => {
   test('a pipe character inside cell content does not corrupt the rendered table', async ({ browser }) => {
+    // See 01-part3-runtime-context.spec.ts's timeout comment — local dev needs more
+    // than the 90s default for a real wizard-load + chat-reply round trip.
+    test.setTimeout(180_000);
     const context = await browser.newContext({ storageState: 'auth/.storage-state.local.json' });
     const page = await context.newPage();
     await gotoAiInstructionStep(page);

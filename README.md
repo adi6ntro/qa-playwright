@@ -187,6 +187,13 @@ Phase4 chat surface (`OnboardingService` → `reporty-onboard-phase3`).
   isolation) stay manual-only even locally — editing a config file and
   restarting a process isn't something a Playwright script should do, it's
   just no longer *unsafe* now that it targets your own local checkout.
+- **TC-P3-01 does not clean up after itself inline** (matching
+  `maha-instructions`'s own `B11` convention) — a first version tried an
+  inline delete+confirm cycle on top of the add+confirm cycle it already
+  needs, and that pushed the test past even a 180s per-test timeout
+  (live-reproduced 2026-09-05). Run `npm run cleanup:ob4` occasionally, or
+  after repeated dev-time re-runs of TC-P3-01, to sweep leftover
+  `TC_P3_01_TEST_RULE` marker rows from the test clinic's instruction list.
 
 ## Setup
 
@@ -247,7 +254,8 @@ npm run test:ob4-part3        # Part 3: runtime context propagation
 npm run test:ob4-part3b       # Part 3b: Phase 3 compatibility guarantee
 npm run test:ob4-mdtbl        # markdown table rendering addendum
 npm run test:ob4-crm08-stub   # CRM-08 consent-tool stub honesty check
-npm run test:ob4-all          # everything under ob4-crm-export/
+npm run test:ob4-all          # everything under ob4-crm-export/ (includes the cleanup sweep below)
+npm run cleanup:ob4           # sweep leftover TC_P3_01_TEST_RULE markers
 
 npm run test:all              # absolutely everything (all suites) — will FAIL on the OB4
                                # files unless BASE_URL is also set to your local Laravel

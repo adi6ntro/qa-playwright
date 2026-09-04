@@ -15,6 +15,7 @@
     "test:ob4-mdtbl": "BASE_URL=http://localhost:8000 playwright test scenarios/ob4-crm-export/03-markdown-table-rendering.spec.ts",
     "test:ob4-crm08-stub": "BASE_URL=http://localhost:8000 playwright test scenarios/ob4-crm-export/04-crm08-consent-stub.spec.ts",
     "test:ob4-all": "BASE_URL=http://localhost:8000 playwright test scenarios/ob4-crm-export/",
+    "cleanup:ob4": "BASE_URL=http://localhost:8000 playwright test scenarios/ob4-crm-export/00-cleanup-leftover-markers.spec.ts",
 
     "test:inbox": "playwright test scenarios/inbox-marketing/01-inbox.spec.ts",
     "test:marketing": "playwright test scenarios/inbox-marketing/02-marketing-templates.spec.ts",

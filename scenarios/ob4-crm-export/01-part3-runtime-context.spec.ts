@@ -1,5 +1,11 @@
 import { test as base, expect } from '@playwright/test';
-import { gotoAiInstructionStep, sendMessage } from '../../helpers/maha-chat';
+import {
+  gotoAiInstructionStep,
+  sendMessage,
+  sendAndConfirm,
+  getInstructionPanelState,
+  refreshAndReturnToStep,
+} from '../../helpers/maha-chat';
 import { ReportRecorder } from '../../helpers/report';
 import '../../helpers/ob4-local-guard'; // throws if BASE_URL isn't local — see that file for why
 
@@ -45,24 +51,65 @@ base.afterAll(async () => {
 });
 
 // TC-P3-01 — SA, default single-branch account, ordinary Phase 3 chat.
+//
+// Uses sendAndConfirm (not a bare sendMessage) and verifies real persistence
+// via the instruction panel — a first pass here used sendMessage() and only
+// captured Maha's confirmation PROMPT ("Mohon konfirmasi... apakah Anda ingin
+// menyimpan?"), never actually completing the write, which doesn't match the
+// QA doc's own expected result ("Instruksi baru berhasil tersimpan"). Mirrors
+// scenarios/maha-instructions/03-section-b-instructions.spec.ts's B11 pattern
+// (count delta + verbatim-in-panel + persisted-after-refresh), and cleans up
+// afterward since this runs against a real (shared) test clinic account, not
+// a disposable one — unlike B11, nothing downstream depends on this rule
+// still existing.
 base.describe('TC-P3-01 — SA baseline Phase 3 chat still works', () => {
-  base('SA: ordinary instruction add does not error', async ({ browser }) => {
+  base('SA: ordinary instruction add actually persists, not just gets confirmed-prompted', async ({ browser }) => {
+    // Local dev needs real headroom: the wizard's first paint alone can take up to
+    // ~60s (real backend round trip, see helpers/maha-chat.ts's gotoAiInstructionStep
+    // comment), and a real chat reply on top of that can take up to ~125s
+    // (FO_AI_CHAT_TIMEOUT_MS in ai-instruction.js) — 90s default is not enough.
+    base.setTimeout(180_000);
     const context = await browser.newContext({ storageState: 'auth/.storage-state.local.json' });
     const page = await context.newPage();
     await gotoAiInstructionStep(page);
 
-    const reply = await sendMessage(page, 'Tambahkan instruksi: jangan terima pasien baru setelah jam 8 malam');
+    // Arabic trigger + Latin-prefixed marker, matching the proven-working pattern from
+    // scenarios/maha-instructions/03-section-b-instructions.spec.ts's B11 test. A first
+    // pass here used the QA doc's own Indonesian example trigger with an English-prefixed
+    // marker — Maha fully paraphrased/translated it into Arabic and dropped the marker
+    // entirely (this clinic clearly normalizes everything to Arabic), so a verbatim
+    // includes() check could never pass. The instruction WAS genuinely saved that run —
+    // just not under the literal string being checked for.
+    const testText = 'TC_P3_01_TEST_RULE — تعليمة اختبار سياق التشغيل';
+    const before = await getInstructionPanelState(page);
+
+    const { replies, confirmRoundsNeeded } = await sendAndConfirm(page, `أضيفي قاعدة: ${testText}`);
+    const last = replies[replies.length - 1];
+
+    const afterChat = await getInstructionPanelState(page);
+    const countMovedByOne =
+      before.count !== null && afterChat.count !== null && afterChat.count === before.count + 1;
+    const verbatimPresent = afterChat.rows.some((r) => r.text.includes(testText));
+
+    const afterRefresh = await refreshAndReturnToStep(page);
+    const persisted = afterRefresh.rows.some((r) => r.text.includes(testText));
+
     recorder.record({
       id: 'TC-P3-01',
-      tool: 'runtime context (user_role/branch_count injection)',
-      trigger: 'Tambahkan instruksi: jangan terima pasien baru setelah jam 8 malam',
-      result: 'NEEDS_REVIEW',
+      tool: 'runtime context (user_role/branch_count injection) + save_instruction persistence',
+      trigger: `أضيفي قاعدة: ${testText}`,
+      result: countMovedByOne && verbatimPresent && persisted ? 'PASS' : 'FAIL',
       evidence:
-        `${reply.text}\n\n[Manual cross-check needed] grep the OB4 python log for this session and confirm ` +
-        `user_role=super_admin, branch_count=1, and no error from _empty_branch_context().`,
+        `reply="${last.text}" | before_count=${before.count} after_count=${afterChat.count} ` +
+        `verbatim_in_panel=${verbatimPresent} persisted_after_refresh=${persisted}\n\n` +
+        `[Manual cross-check still needed for the runtime-context claim specifically] grep the OB4 python ` +
+        `log for this session and confirm user_role=super_admin, branch_count=1, and no error from ` +
+        `_empty_branch_context().`,
+      confirmRoundsNeeded,
+      persisted,
     });
-    expect(reply.text.length).toBeGreaterThan(0);
     await context.close();
+    expect(persisted, 'the instruction must actually persist, not just get a confirmation prompt').toBe(true);
   });
 });
 
@@ -70,6 +117,11 @@ base.describe('TC-P3-01 — SA baseline Phase 3 chat still works', () => {
 // + `npm run login-setup:local-ba` to have been run once.
 base.describe('TC-P3-02 — BA runtime context resolves correctly', () => {
   base('BA: acting_user_id/user_role resolve to the staff, not the owner', async ({ browser }) => {
+    // Local dev needs real headroom: the wizard's first paint alone can take up to
+    // ~60s (real backend round trip, see helpers/maha-chat.ts's gotoAiInstructionStep
+    // comment), and a real chat reply on top of that can take up to ~125s
+    // (FO_AI_CHAT_TIMEOUT_MS in ai-instruction.js) — 90s default is not enough.
+    base.setTimeout(180_000);
     base.skip(
       !process.env.LOGIN_EMAIL_BA,
       'Set LOGIN_EMAIL_BA/LOGIN_PASSWORD_BA in .env and run `npm run login-setup:local-ba` to enable this test.'
@@ -98,6 +150,11 @@ base.describe('TC-P3-02 — BA runtime context resolves correctly', () => {
 // field names like managed_branch_ids verbatim — that part IS checkable.
 base.describe('TC-P3-03 — Maha describes role/branch coherently, no raw internal dump', () => {
   base('SA: role/branch question gets a natural answer, not a JSON dump', async ({ browser }) => {
+    // Local dev needs real headroom: the wizard's first paint alone can take up to
+    // ~60s (real backend round trip, see helpers/maha-chat.ts's gotoAiInstructionStep
+    // comment), and a real chat reply on top of that can take up to ~125s
+    // (FO_AI_CHAT_TIMEOUT_MS in ai-instruction.js) — 90s default is not enough.
+    base.setTimeout(180_000);
     const context = await browser.newContext({ storageState: 'auth/.storage-state.local.json' });
     const page = await context.newPage();
     await gotoAiInstructionStep(page);
@@ -123,6 +180,11 @@ base.describe('TC-P3-03 — Maha describes role/branch coherently, no raw intern
 // own precondition — this suite cannot safely create that row itself.
 base.describe('TC-P3-04 — orphaned staff degrades to doctor, never escalates', () => {
   base('orphaned staff: context must degrade to doctor, not rise to super_admin', async ({ browser }) => {
+    // Local dev needs real headroom: the wizard's first paint alone can take up to
+    // ~60s (real backend round trip, see helpers/maha-chat.ts's gotoAiInstructionStep
+    // comment), and a real chat reply on top of that can take up to ~125s
+    // (FO_AI_CHAT_TIMEOUT_MS in ai-instruction.js) — 90s default is not enough.
+    base.setTimeout(180_000);
     base.skip(
       !process.env.LOGIN_EMAIL_ORPHAN,
       'Set LOGIN_EMAIL_ORPHAN/LOGIN_PASSWORD_ORPHAN in .env (account must have users.role_id=2 with a ' +
@@ -161,6 +223,11 @@ base.describe('TC-P3-04 — orphaned staff degrades to doctor, never escalates',
 // fields, this stops proving what it currently proves.
 base.describe('TC-P3-05 — server ignores client-supplied identity fields', () => {
   base('spoofed acting_user_id/user_id/is_admin in the POST body has no effect', async ({ browser }) => {
+    // Local dev needs real headroom: the wizard's first paint alone can take up to
+    // ~60s (real backend round trip, see helpers/maha-chat.ts's gotoAiInstructionStep
+    // comment), and a real chat reply on top of that can take up to ~125s
+    // (FO_AI_CHAT_TIMEOUT_MS in ai-instruction.js) — 90s default is not enough.
+    base.setTimeout(180_000);
     const context = await browser.newContext({ storageState: 'auth/.storage-state.local.json' });
     const page = await context.newPage();
     await gotoAiInstructionStep(page);
