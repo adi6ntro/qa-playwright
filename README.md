@@ -187,6 +187,28 @@ Phase4 chat surface (`OnboardingService` → `reporty-onboard-phase3`).
   isolation) stay manual-only even locally — editing a config file and
   restarting a process isn't something a Playwright script should do, it's
   just no longer *unsafe* now that it targets your own local checkout.
+- **CRM-05 (`crm_add_note`, `scenarios/ob4-crm-export/05-crm05-add-note.spec.ts`)**
+  is the template for the rest of the newly-real CRM-01..12/EXP/RMD/DSP surface
+  (a 2026-09-05 code audit flipped most of it from "not implemented" to real —
+  see the source doc's own re-audit table). Chosen because it's simple and has
+  no known bugs to design around, unlike most of the others. Needs `crm`
+  enabled for this clinic (`TEST_CRM_CAPABILITY_ENABLED=1`, same gate as
+  `TC-CRM08-STUB-01`).
+  - **Real gap found while building this**: `crm_search_contacts` only exposes
+    appointment-fact filters (last visit / booking status / service / doctor /
+    hasn't-booked-since) — there is no name or phone filter anywhere, and
+    every per-contact tool needs a numeric `contact_id`. Maha has no tool to
+    resolve "the contact named X" to an ID; a real owner could only act on a
+    contact right after an appointment-fact search just surfaced it. This
+    suite's triggers reference the contact by numeric ID directly rather than
+    assume cross-turn name resolution works — likely worth re-checking every
+    other CRM-02..12 doc example that reads like "kontak Reem" just works.
+  - Uses `reporty-onboard-phase3`'s own `POST /clinic/<id>/action` endpoint
+    (bypasses the LLM and Laravel entirely, unauthenticated on a local box) for
+    two things: reading back structured JSON instead of trusting a
+    natural-language reply to quote something verbatim, and forcing the
+    "no `causing_message`" scenario the doc itself says normally needs
+    dev coordination to trigger.
 - **TC-P3-01 does not clean up after itself inline** (matching
   `maha-instructions`'s own `B11` convention) — a first version tried an
   inline delete+confirm cycle on top of the add+confirm cycle it already
@@ -254,6 +276,7 @@ npm run test:ob4-part3        # Part 3: runtime context propagation
 npm run test:ob4-part3b       # Part 3b: Phase 3 compatibility guarantee
 npm run test:ob4-mdtbl        # markdown table rendering addendum
 npm run test:ob4-crm08-stub   # CRM-08 consent-tool stub honesty check
+npm run test:ob4-crm05        # CRM-05 crm_add_note (template for the newly-real CRM-01..12/EXP/RMD/DSP surface)
 npm run test:ob4-all          # everything under ob4-crm-export/ (includes the cleanup sweep below)
 npm run cleanup:ob4           # sweep leftover TC_P3_01_TEST_RULE markers
 
