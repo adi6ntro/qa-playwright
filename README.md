@@ -124,13 +124,95 @@ reset-to-baseline test in Section B.
 ### 3. OB4 / Phase 4 CRM+Export — `scenarios/ob4-crm-export/`
 
 Automates `QA_TestScript_Phase4_CRM_Export.md` (reporty-web-backup repo
-root) — but **only** the sections that doc's own status table marks
-"Sudah dibangun" as of 2026-09-04: Part 3 (runtime context propagation),
-Part 3b (Phase 3 compatibility guarantee), the markdown-table rendering
-addendum, and the CRM-08 `crm_record_consent` STUB honesty check. The other
-~117 test cases in that doc (CRM-01..12 real tools, EXP-01..08, RMD-01..04,
-DSP-01, TPL-01/02, UAP-01..04) are unimplemented backend work with no spec
-files here yet — write them once each tool actually ships.
+root). That doc's 2026-09-06 revision splits its ~156 test cases into
+release phases; **this suite currently covers Phase 1 only** (Adi's call,
+2026-09-06 — hold Phase 2 and beyond until there's a further OB4 update to
+script against):
+
+- Part 3 (runtime context propagation), Part 3b (Phase 3 compatibility
+  guarantee), the CRM-08 `crm_record_consent` STUB honesty check, and
+  CRM-05 `crm_add_note` — built earlier (2026-09-04/05), see below.
+- **CRM-01..12, EXP-01..08, RMD-01..04, DSP-01 — the rest of Phase 1 — added
+  2026-09-06** in one pass across `06-*.spec.ts` through `28-*.spec.ts`,
+  following CRM-05's own template. Every "real" tool call is verified two
+  ways: a live chat trigger (Arabic — this clinic normalizes everything to
+  Arabic, confirmed repeatedly across this suite) for NEEDS_REVIEW-grade
+  wording checks, plus a **direct** `POST /clinic/<id>/action` call (same
+  `registry.invoke()` path a real tool call uses, bypassing the LLM/Laravel
+  entirely) wherever the doc's expected result is a checkable data fact —
+  that's what turns most of these into real mechanical PASS/FAIL instead of
+  NEEDS_REVIEW.
+- **Not scripted, on purpose**, per the doc's own phase split: Phase 2 (the
+  markdown-table file move — `03-markdown-table-rendering.spec.ts` already
+  covers today's actual behavior regardless of which file it should move to;
+  the `acting_user_id` plumbing item and its regression-retest rows, which
+  reuse the SAME Phase-1 test IDs once that plumbing lands — no new spec
+  files needed there, just re-running the existing ones), CRM-08's real
+  consent write, TPL-01/02, and UAP-01..04 (blocked cross-team / paused /
+  out of Phase 4 scope entirely).
+
+**Real gaps/deviations found while building the 2026-09-06 batch** (each
+documented in more detail in its own file's header comment — confirmed by
+reading `reporty-onboard-phase3` source directly, not assumed from the doc):
+`crm_search_contacts` only exposes appointment-fact filters, so TC-CRM01-01..05
+are UNABLE_TO_TEST stubs (only the STUB-01/02 checks are live); `crm_get_contact`'s
+`follow_ups` field is hardcoded `[]` in source even though CRM-06 follow-ups are
+real; `crm_save_as_segment` returns `section_id:"marketing"` not a per-segment
+`segment_url`, so TC-CRM12-01..04 (not the STUB checks) are UNABLE_TO_TEST;
+CRM-11's real batch cap is 2000, not the doc's original 200; `list_reminders()`
+returns no `set_ref` at all; `render_chart` (DSP-01) reads only from
+`crm_search_contacts`-shaped data, never `crm_aggregate`; and **TC-RMD03-03 is a
+real, confirmed, unfixed authorization gap** — `cancel_reminder()`/
+`mark_reminder_done()` scope only to clinic, not to the reminder's actual
+creator/target, so any staff in the same clinic can cancel/complete another
+staff's personal reminder (`26-rmd03-cancel-reminder.spec.ts` tests this for
+real and reports the observed outcome as PASS/FAIL, not softened to
+NEEDS_REVIEW, per the doc's own instruction to flag this as a priority
+security bug if reproduced).
+
+**Real account fixture wired up 2026-09-07**, replacing the earlier
+clinic-440/contact-896 placeholder fixture with actual real accounts found
+(and lightly adjusted) in the shared dev DB:
+
+- **`LOGIN_EMAIL_OB4SA`** — the new default SA identity for almost every OB4
+  test (`auth/.storage-state.ob4sa.local.json`). A real multi-branch clinic
+  (2 branches, 88 real patients) — chosen deliberately multi-branch so the
+  same fixture also covers branch-isolation checks, not just plain CRM/EXP/
+  RMD/DSP positives. Run `npm run login-setup:local-ob4sa`.
+- **`LOGIN_EMAIL_SINGLEBRANCH`** — a dedicated, genuinely single-branch
+  owner, used ONLY by TC-P3-01 (its own precondition requires single-branch,
+  which the multi-branch OB4SA account above can't satisfy). Also the
+  account `00-cleanup-leftover-markers.spec.ts` sweeps. Run
+  `npm run login-setup:local-singlebranch`.
+- **`LOGIN_EMAIL_BA`** — a real `role_id=2` branch_admin under OB4SA's
+  clinic, pinned (`user_infos.branch_id`) to one specific branch.
+- **`LOGIN_EMAIL_BA2`** — a second real branch_admin, SAME clinic as BA but
+  pinned to the OTHER branch — makes branch-isolation checks genuinely
+  testable (a staff member with no `branch_id` at all just silently defaults
+  to the clinic's first branch per `utils/db.py`'s fallback chain, which
+  would make a rejection test pass for the wrong reason). Also serves as the
+  "unauthorized third party" in TC-RMD03-03's security-gap check — no
+  separate third account needed. Run `npm run login-setup:local-ba2`.
+- **`LOGIN_EMAIL_ORPHAN`** — still not set up (unrelated to the above three;
+  needs its own manual malformed DB row per TC-P3-04's precondition).
+
+Two real, same-branch/opposite-branch fixtures came out of this: **TC-CRM02-03**
+(BA2 attempting to read a contact that's tagged to BA's branch, not BA2's —
+must not leak the real name) and **TC-CRM04-04** (BA attempting to reassign
+one of their own contacts to BA2, whose `branch_id` is different — must be
+rejected) are the two tests that actually exercise branch isolation with this
+fixture; both were verified against the live `crm.py` branch-scope checks
+(`user_patient_phone_branch` for contact access, `user_infos.branch_id` for
+assignee checks) before picking which direction (BA→BA2 vs BA2→BA) each one
+needed.
+
+Several of the newly-scripted tests are gated behind env vars for real
+contact/staff ids under OB4SA's clinic (a genuine duplicate-contact pair for
+CRM-07 merge, a plain assignee, a branch-tagged contact, etc.) — see
+`.env.example`'s "Phase 1 CRM/EXP/RMD/DSP" section for the full list and
+`.env` (not committed) for this checkout's actual real values; every var
+skips its test cleanly with a clear message when unset rather than guessing
+at an id that might not exist or might belong to someone else's real data.
 
 **Local-only, by design — this suite will not run against dev.reporty.sa.**
 `helpers/ob4-local-guard.ts` throws at file-load time unless `BASE_URL` is a
@@ -160,10 +242,10 @@ Phase4 chat surface (`OnboardingService` → `reporty-onboard-phase3`).
 
 - **Sessions are separate from the other two suites.** Cookies are
   domain-scoped, so a dev.reporty.sa session can't be reused against
-  localhost. Run `npm run login-setup:local` (and `:local-ba` /
-  `:local-orphan` for the two extra accounts below) — these save to
-  `auth/.storage-state.local.json` etc., distinct from the plain
-  `.storage-state.json` the other suites use.
+  localhost. Run `npm run login-setup:local-ob4sa` (and `:local-singlebranch`
+  / `:local-ba` / `:local-ba2` / `:local-orphan` for the other accounts
+  above) — these save to `auth/.storage-state.ob4sa.local.json` etc.,
+  distinct from the plain `.storage-state.json` the other suites use.
 - **TC-P3-02** needs a real branch_admin (BA) account — create one via the
   product's own "My Doctors" flow, not by hand in the DB (see the test
   script's own setup steps). **TC-P3-04** needs a deliberately malformed
@@ -238,9 +320,11 @@ logins/captchas after that.
 cookies are domain-scoped, so this dev.reporty.sa session can't be reused
 against localhost:
 ```bash
-npm run login-setup:local          # SA account, against your local Laravel
-npm run login-setup:local-ba       # BA account (needs LOGIN_EMAIL_BA/PASSWORD_BA)
-npm run login-setup:local-orphan   # orphaned-staff account (needs LOGIN_EMAIL_ORPHAN/PASSWORD_ORPHAN)
+npm run login-setup:local-ob4sa          # primary SA (multi-branch clinic, needs LOGIN_EMAIL_OB4SA/PASSWORD_OB4SA)
+npm run login-setup:local-singlebranch   # dedicated single-branch SA — TC-P3-01 only (needs LOGIN_EMAIL_SINGLEBRANCH/PASSWORD_SINGLEBRANCH)
+npm run login-setup:local-ba             # BA, one branch of OB4SA's clinic (needs LOGIN_EMAIL_BA/PASSWORD_BA)
+npm run login-setup:local-ba2            # second BA, OB4SA's OTHER branch (needs LOGIN_EMAIL_BA2/PASSWORD_BA2) — also TC-RMD03-03's "unauthorized third party"
+npm run login-setup:local-orphan         # orphaned-staff account (needs LOGIN_EMAIL_ORPHAN/PASSWORD_ORPHAN) — not set up yet
 ```
 These require your local `reporty-web-backup` (`php artisan serve --port=8000`)
 and local `reporty-onboard-phase3` (`.venv/bin/python app.py`) to already be
@@ -272,11 +356,35 @@ npm run cleanup:maha-bug005   # sweep leftover [BUG005_TEST_*] markers
 npm run cleanup:maha-etm      # sweep leftover ETM_TEST_* markers
 
 # OB4 / Phase 4 CRM+Export — requires local Laravel + local reporty-onboard-phase3 running first
+# Phase 1 only (see the OB4 suite section above for what Phase 1 covers and why the rest is held).
 npm run test:ob4-part3        # Part 3: runtime context propagation
 npm run test:ob4-part3b       # Part 3b: Phase 3 compatibility guarantee
-npm run test:ob4-mdtbl        # markdown table rendering addendum
+npm run test:ob4-mdtbl        # markdown table rendering addendum (Phase 2, built earlier — not new Phase 1 work)
 npm run test:ob4-crm08-stub   # CRM-08 consent-tool stub honesty check
-npm run test:ob4-crm05        # CRM-05 crm_add_note (template for the newly-real CRM-01..12/EXP/RMD/DSP surface)
+npm run test:ob4-crm05        # CRM-05 crm_add_note (template for the rest of CRM-01..12/EXP/RMD/DSP)
+npm run test:ob4-crm01        # CRM-01 crm_search_contacts (STUB-01/02 real; -01..05 UNABLE_TO_TEST, filters not exposed)
+npm run test:ob4-crm02        # CRM-02 crm_get_contact
+npm run test:ob4-crm03        # CRM-03 crm_update_contact
+npm run test:ob4-crm04        # CRM-04 crm_set_responsible
+npm run test:ob4-crm06        # CRM-06 follow-ups
+npm run test:ob4-crm07        # CRM-07 crm_merge_contacts
+npm run test:ob4-crm09        # CRM-09 crm_aggregate
+npm run test:ob4-crm10        # CRM-10 crm_get_audit_trail
+npm run test:ob4-crm11        # CRM-11 crm_bulk_apply
+npm run test:ob4-crm12        # CRM-12 crm_save_as_segment (STUB-01/02 real; -01..04 UNABLE_TO_TEST, no segment_url)
+npm run test:ob4-exp01        # EXP-01 export search result
+npm run test:ob4-exp02        # EXP-02 export timing / set_ref expiry
+npm run test:ob4-exp03        # EXP-03 export branch scope
+npm run test:ob4-exp04        # EXP-04 export metadata
+npm run test:ob4-exp05        # EXP-05 export report types (only the "kontak" case is testable today)
+npm run test:ob4-exp06        # EXP-06 export history
+npm run test:ob4-exp07        # EXP-07 export batching
+npm run test:ob4-exp08        # EXP-08 export TIER 3 cross-branch confirmation
+npm run test:ob4-rmd01        # RMD-01 self-reminder
+npm run test:ob4-rmd02        # RMD-02 list reminders
+npm run test:ob4-rmd03        # RMD-03 cancel reminder (⚠️ includes the TC-RMD03-03 security-gap check)
+npm run test:ob4-rmd04        # RMD-04 mark done
+npm run test:ob4-dsp01        # DSP-01 render_chart
 npm run test:ob4-all          # everything under ob4-crm-export/ (includes the cleanup sweep below)
 npm run cleanup:ob4           # sweep leftover TC_P3_01_TEST_RULE markers
 

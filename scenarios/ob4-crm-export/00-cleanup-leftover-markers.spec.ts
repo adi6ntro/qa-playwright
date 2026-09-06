@@ -17,7 +17,9 @@ import '../../helpers/ob4-local-guard'; // throws if BASE_URL isn't local — se
  *
  * `npm run cleanup:ob4`
  */
-test.use({ storageState: 'auth/.storage-state.local.json' }); // NOT the project default (dev.reporty.sa session) — this suite is local-only
+// Uses the SAME account as TC-P3-01 (singlebranch, not the default ob4sa account) —
+// TC_P3_01_TEST_RULE markers are left in that account's instruction panel, not ob4sa's.
+test.use({ storageState: 'auth/.storage-state.singlebranch.local.json' });
 
 test('delete leftover TC_P3_01_TEST_RULE markers', async ({ page }) => {
   test.setTimeout(300_000);

@@ -69,7 +69,11 @@ base.describe('TC-P3-01 — SA baseline Phase 3 chat still works', () => {
     // comment), and a real chat reply on top of that can take up to ~125s
     // (FO_AI_CHAT_TIMEOUT_MS in ai-instruction.js) — 90s default is not enough.
     base.setTimeout(180_000);
-    const context = await browser.newContext({ storageState: 'auth/.storage-state.local.json' });
+    // TC-P3-01 specifically needs a genuinely single-branch clinic (its own precondition) —
+    // the default ob4sa account is multi-branch on purpose for the branch-isolation tests,
+    // so this one test uses the dedicated singlebranch account instead (see 00-cleanup-
+    // leftover-markers.spec.ts, which sweeps this same account's leftover markers).
+    const context = await browser.newContext({ storageState: 'auth/.storage-state.singlebranch.local.json' });
     const page = await context.newPage();
     await gotoAiInstructionStep(page);
 
@@ -155,7 +159,7 @@ base.describe('TC-P3-03 — Maha describes role/branch coherently, no raw intern
     // comment), and a real chat reply on top of that can take up to ~125s
     // (FO_AI_CHAT_TIMEOUT_MS in ai-instruction.js) — 90s default is not enough.
     base.setTimeout(180_000);
-    const context = await browser.newContext({ storageState: 'auth/.storage-state.local.json' });
+    const context = await browser.newContext({ storageState: 'auth/.storage-state.ob4sa.local.json' });
     const page = await context.newPage();
     await gotoAiInstructionStep(page);
 
@@ -228,7 +232,7 @@ base.describe('TC-P3-05 — server ignores client-supplied identity fields', () 
     // comment), and a real chat reply on top of that can take up to ~125s
     // (FO_AI_CHAT_TIMEOUT_MS in ai-instruction.js) — 90s default is not enough.
     base.setTimeout(180_000);
-    const context = await browser.newContext({ storageState: 'auth/.storage-state.local.json' });
+    const context = await browser.newContext({ storageState: 'auth/.storage-state.ob4sa.local.json' });
     const page = await context.newPage();
     await gotoAiInstructionStep(page);
 

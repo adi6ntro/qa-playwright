@@ -33,7 +33,7 @@ test.describe('TC-CRM08-STUB-01 — with `crm` capability on, stub is honest abo
       'Set TEST_CRM_CAPABILITY_ENABLED=1 only after manually enabling "phase4Capabilities": {"crm": "*"} ' +
         '(or this test clinic\'s id) in your LOCAL reporty-onboard-phase3 config.json and restarting app.py.'
     );
-    const context = await browser.newContext({ storageState: 'auth/.storage-state.local.json' });
+    const context = await browser.newContext({ storageState: 'auth/.storage-state.ob4sa.local.json' });
     const page = await context.newPage();
     await gotoAiInstructionStep(page);
 
@@ -64,7 +64,7 @@ test.describe('TC-CRM08-STUB-02 — with `crm` off (default today), no regressio
     // See 01-part3-runtime-context.spec.ts's timeout comment — local dev needs more
     // than the 90s default for a real wizard-load + chat-reply round trip.
     test.setTimeout(180_000);
-    const context = await browser.newContext({ storageState: 'auth/.storage-state.local.json' });
+    const context = await browser.newContext({ storageState: 'auth/.storage-state.ob4sa.local.json' });
     const page = await context.newPage();
     await gotoAiInstructionStep(page);
 

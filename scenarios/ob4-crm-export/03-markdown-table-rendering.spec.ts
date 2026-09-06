@@ -41,7 +41,7 @@ test.describe('TC-MDTBL-01 — markdown table renders as a real HTML table', () 
     // See 01-part3-runtime-context.spec.ts's timeout comment — local dev needs more
     // than the 90s default for a real wizard-load + chat-reply round trip.
     test.setTimeout(180_000);
-    const context = await browser.newContext({ storageState: 'auth/.storage-state.local.json' });
+    const context = await browser.newContext({ storageState: 'auth/.storage-state.ob4sa.local.json' });
     const page = await context.newPage();
     await gotoAiInstructionStep(page);
 
@@ -80,7 +80,7 @@ test.describe('TC-MDTBL-02 — special characters inside table cells do not brea
     // See 01-part3-runtime-context.spec.ts's timeout comment — local dev needs more
     // than the 90s default for a real wizard-load + chat-reply round trip.
     test.setTimeout(180_000);
-    const context = await browser.newContext({ storageState: 'auth/.storage-state.local.json' });
+    const context = await browser.newContext({ storageState: 'auth/.storage-state.ob4sa.local.json' });
     const page = await context.newPage();
     await gotoAiInstructionStep(page);
 

@@ -47,7 +47,7 @@ const CRM_CAPABILITY_SKIP_REASON =
 // Real, pre-existing contact for this test clinic (patients.id=896, clinic_id=440,
 // name "adi careplan new test") — found via a direct DB query 2026-09-06, not created
 // by this suite. Picked because its name already marks it as dedicated test data.
-const TEST_CONTACT_ID = '896';
+const TEST_CONTACT_ID = process.env.TEST_CONTACT_ID || '';
 
 /**
  * Calls a registered tool directly via reporty-onboard-phase3's own
@@ -82,8 +82,9 @@ test.describe('TC-CRM05-01 + TC-CRM05-02 — add note via chat, verify via direc
   test('note is saved with the exact causing_message and appears in the contact profile', async ({ browser }) => {
     test.setTimeout(180_000);
     test.skip(process.env.TEST_CRM_CAPABILITY_ENABLED !== '1', CRM_CAPABILITY_SKIP_REASON);
+    test.skip(!process.env.TEST_CONTACT_ID, 'Set TEST_CONTACT_ID to a real contact id under LOGIN_EMAIL_OB4SA\'s clinic.');
 
-    const context = await browser.newContext({ storageState: 'auth/.storage-state.local.json' });
+    const context = await browser.newContext({ storageState: 'auth/.storage-state.ob4sa.local.json' });
     const page = await context.newPage();
     await gotoAiInstructionStep(page);
     const clinicId = await page.evaluate(() => (window as any).FO?.clinicId);
@@ -127,8 +128,9 @@ test.describe('TC-CRM05-03 — edit/delete rejected (append-only)', () => {
   test('edit and delete requests are both rejected; the original note is untouched', async ({ browser }) => {
     test.setTimeout(180_000);
     test.skip(process.env.TEST_CRM_CAPABILITY_ENABLED !== '1', CRM_CAPABILITY_SKIP_REASON);
+    test.skip(!process.env.TEST_CONTACT_ID, 'Set TEST_CONTACT_ID to a real contact id under LOGIN_EMAIL_OB4SA\'s clinic.');
 
-    const context = await browser.newContext({ storageState: 'auth/.storage-state.local.json' });
+    const context = await browser.newContext({ storageState: 'auth/.storage-state.ob4sa.local.json' });
     const page = await context.newPage();
     await gotoAiInstructionStep(page);
     const clinicId = await page.evaluate(() => (window as any).FO?.clinicId);
@@ -169,8 +171,9 @@ test.describe('TC-CRM05-04 — causing_message is a required field', () => {
   test('crm_add_note rejects a call with no causing_message — direct call, no chat/LLM involved', async ({ browser }) => {
     test.setTimeout(60_000);
     test.skip(process.env.TEST_CRM_CAPABILITY_ENABLED !== '1', CRM_CAPABILITY_SKIP_REASON);
+    test.skip(!process.env.TEST_CONTACT_ID, 'Set TEST_CONTACT_ID to a real contact id under LOGIN_EMAIL_OB4SA\'s clinic.');
 
-    const context = await browser.newContext({ storageState: 'auth/.storage-state.local.json' });
+    const context = await browser.newContext({ storageState: 'auth/.storage-state.ob4sa.local.json' });
     const page = await context.newPage();
     await gotoAiInstructionStep(page); // only to resolve window.FO.clinicId cheaply — no chat message sent
     const clinicId = await page.evaluate(() => (window as any).FO?.clinicId);
