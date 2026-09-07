@@ -113,7 +113,7 @@ test.describe('TC-DSP01-01 — bar chart, group_by=month', () => {
       hasnt_booked_since: '2025-01-01',
       limit: 500,
     });
-    expect(search?.set_ref, 'crm_search_contacts must return a set_ref to chart from').toBeTruthy();
+    expect(search?.data?.set_ref, 'crm_search_contacts must return a set_ref to chart from').toBeTruthy();
 
     const chart = await callAction(page, clinicId, 'render_chart', {
       set_ref: search.set_ref,
@@ -123,7 +123,7 @@ test.describe('TC-DSP01-01 — bar chart, group_by=month', () => {
     expect(chart?.success, 'render_chart must succeed for a bar chart').toBe(true);
     expect(chart?.rendered).toBe(true);
 
-    const chartData = await fetchChartData(page, chart.chart_id);
+    const chartData = await fetchChartData(page, chart.data.chart_id);
 
     recorder.record({
       id: 'TC-DSP01-01-BACKEND',
@@ -178,14 +178,14 @@ test.describe('TC-DSP01-02 — line chart from the same monthly-trend data', () 
       hasnt_booked_since: '2025-01-01',
       limit: 500,
     });
-    expect(search?.set_ref).toBeTruthy();
+    expect(search?.data?.set_ref).toBeTruthy();
 
     const chart = await callAction(page, clinicId, 'render_chart', {
       set_ref: search.set_ref,
       view: 'line',
       group_by: 'month',
     });
-    const chartData = chart?.success ? await fetchChartData(page, chart.chart_id) : null;
+    const chartData = chart?.success ? await fetchChartData(page, chart.data.chart_id) : null;
 
     recorder.record({
       id: 'TC-DSP01-02-BACKEND',
@@ -242,7 +242,7 @@ test.describe('TC-DSP01-03 — pie chart rejected above 6 slices (premise-checke
       hasnt_booked_since: '2020-01-01', // as broad as this filter allows, to maximize month spread
       limit: 500,
     });
-    expect(search?.set_ref).toBeTruthy();
+    expect(search?.data?.set_ref).toBeTruthy();
 
     // Probe the actual slice count via a bar chart first (bar has no cap) — this is
     // the doc's own acknowledged risk (TC-DSP01-03's setup note: ">6 bulan... otomatis
@@ -253,7 +253,7 @@ test.describe('TC-DSP01-03 — pie chart rejected above 6 slices (premise-checke
       view: 'bar',
       group_by: 'month',
     });
-    const probeData = probeChart?.success ? await fetchChartData(page, probeChart.chart_id) : null;
+    const probeData = probeChart?.success ? await fetchChartData(page, probeChart.data.chart_id) : null;
     const sliceCount = Array.isArray(probeData?.labels) ? probeData.labels.length : 0;
 
     if (sliceCount <= 6) {

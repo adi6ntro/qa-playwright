@@ -55,8 +55,8 @@ const EXPORT_CAPABILITY_SKIP_REASON =
   'can only export a crm_search_contacts result today, so crm must be on too.';
 
 // Same appointment-fact filter as the source doc's own examples throughout Part 2.
-const SEARCH_FILTER = { hasnt_booked_since: '2026-01-01' };
-const SEARCH_TRIGGER = 'ابحثي عن المرضى الذين لم يحجزوا موعدًا منذ 1 يناير 2026';
+const SEARCH_FILTER = { hasnt_booked_since: '2026-06-01' };
+const SEARCH_TRIGGER = 'ابحثي عن المرضى الذين لم يحجزوا موعدًا منذ 1 يونيو 2026';
 
 /**
  * Calls a registered tool directly via reporty-onboard-phase3's own

@@ -89,7 +89,7 @@ async function callAction(
 // Broad, real filter matching the doc's own example ("belum booking sejak 1 Januari
 // 2026") — one of the only 6 appointment-fact filters crm_search_contacts exposes
 // (crm.py's search_contacts() signature), confirmed directly from source.
-const SEARCH_PARAMS = { hasnt_booked_since: '2026-01-01', limit: 200 };
+const SEARCH_PARAMS = { hasnt_booked_since: '2026-06-01', limit: 200 };
 
 test.describe('TC-EXP05-01 — contact_list export to PDF/xlsx/CSV (the only testable data type today)', () => {
   test('crm_search_contacts set_ref exports cleanly to all 3 supported formats', async ({ browser }) => {
@@ -104,7 +104,7 @@ test.describe('TC-EXP05-01 — contact_list export to PDF/xlsx/CSV (the only tes
 
     // Part 1 — real chat pass, NEEDS_REVIEW (reply wording/naturalness isn't
     // mechanically checkable; the mechanical PASS/FAIL check is Part 2 below).
-    const searchTrigger = 'ابحثي عن المرضى الذين لم يحجزوا موعدًا منذ 1 يناير 2026';
+    const searchTrigger = 'ابحثي عن المرضى الذين لم يحجزوا موعدًا منذ 1 يونيو 2026';
     const searchReply = await sendMessage(page, searchTrigger);
     const pdfReply = await sendMessage(page, 'صدّري هذا إلى PDF');
     const xlsxReply = await sendMessage(page, 'صدّري هذا إلى Excel');

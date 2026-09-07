@@ -72,7 +72,7 @@ async function callAction(
   return resp.json();
 }
 
-const SEARCH_PARAMS = { hasnt_booked_since: '2026-01-01', limit: 500 };
+const SEARCH_PARAMS = { hasnt_booked_since: '2026-06-01', limit: 500 };
 
 interface Batch {
   download_url?: string;
@@ -104,7 +104,7 @@ test.describe('TC-EXP07-01 — batch export split by branch', () => {
     expect(clinicId, 'window.FO.clinicId must be present on the AI Instruction step').toBeTruthy();
 
     // Real chat pass — NEEDS_REVIEW (reply wording isn't mechanically checkable).
-    const searchTrigger = 'ابحثي عن جميع المرضى الذين لم يحجزوا موعدًا منذ 1 يناير 2026 في كل الفروع';
+    const searchTrigger = 'ابحثي عن جميع المرضى الذين لم يحجزوا موعدًا منذ 1 يونيو 2026 في كل الفروع';
     const searchReply = await sendMessage(page, searchTrigger);
     const batchReply = await sendMessage(page, 'صدّري هذا مقسمًا حسب الفرع');
     recorder.record({

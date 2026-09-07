@@ -92,7 +92,13 @@ test.describe('TC-CRM05-01 + TC-CRM05-02 — add note via chat, verify via direc
 
     const marker = 'QA_CRM05_NOTE_MARK';
     const noteText = `${marker} — ملاحظة اختبار: المريض يعاني من حساسية تجاه lidocaine`;
-    const trigger = `أضيفي ملاحظة على جهة الاتصال رقم ${TEST_CONTACT_ID}: '${noteText}'`;
+    // No surrounding quotes around noteText — live-reproduced 2026-09-07: the backend
+    // strips leading/trailing single-quote delimiters from causing_message before
+    // storing it (only that one character class differs, byte-for-byte otherwise), so
+    // quoting the note text here would make the "verbatim" assertion below fail for an
+    // artifact of this test's own trigger formatting, not a real product bug. A real
+    // clinic owner wouldn't necessarily quote the note text this way either.
+    const trigger = `أضيفي ملاحظة على جهة الاتصال رقم ${TEST_CONTACT_ID}: ${noteText}`;
     const reply = await sendMessage(page, trigger);
 
     recorder.record({

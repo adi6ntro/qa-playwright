@@ -99,18 +99,18 @@ test.describe('TC-CRM12-STUB-01 — search then save-as-segment in one conversat
       limit: 1,
     });
     let saveResult: any = null;
-    if (search?.set_ref) {
+    if (search?.data?.set_ref) {
       saveResult = await callAction(page, clinicId, 'crm_save_as_segment', {
-        set_ref: search.set_ref,
+        set_ref: search.data.set_ref,
         segment_name: directSegmentName,
         causing_message: '[direct action, ground truth] TC-CRM12-STUB-01 section_id verification',
       });
     }
 
-    const directSaveOk = saveResult?.success === true;
-    const sectionIdCorrect = saveResult?.section_id === 'marketing';
-    const hasSegmentId = saveResult?.segment_id !== undefined && saveResult?.segment_id !== null;
-    const contactCountMatches = saveResult?.contact_count === search?.total;
+    const directSaveOk = saveResult?.data?.success === true;
+    const sectionIdCorrect = saveResult?.data?.section_id === 'marketing';
+    const hasSegmentId = saveResult?.data?.segment_id !== undefined && saveResult?.data?.segment_id !== null;
+    const contactCountMatches = saveResult?.data?.contact_count === search?.data?.total;
 
     const mechanicalChecksPass = directSaveOk && sectionIdCorrect && hasSegmentId && contactCountMatches;
 

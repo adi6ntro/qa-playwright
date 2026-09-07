@@ -120,6 +120,33 @@ test.describe('TC-CRM07-03 — merge without naming a primary contact is rejecte
   });
 });
 
+/**
+ * ⚠️ UNRESOLVED FINDING (2026-09-07), left as-is per Adi's call — do not silently retry
+ * or loosen this assertion without re-reading this note first.
+ *
+ * First live run: the merge never actually happened. `crm_get_contact` on both 111 and
+ * 254 afterward showed neither reported as merged (absorbed_error=undefined,
+ * absorbed_merged_into=undefined) — no partial/corrupted state, just a clean no-op.
+ * The chat transcript's very FIRST reply (before this suite's own sendAndConfirm ever
+ * sent a "نعم") was already an apology — "عذرًا، لم أتمكن من تجهيز هذا التغيير بشكل
+ * صحيح قبل قليل" ("sorry, I couldn't prepare this change correctly a moment ago") —
+ * not a proper Tier-4 confirmation prompt naming survivor/absorbed. After 2 further
+ * confirm-phrase rounds (our own heuristic treating question-mark replies as prompts),
+ * Maha ended up saying it opened a support ticket for a human to handle the contact
+ * merge instead of doing it itself.
+ *
+ * Backend code was checked and looks structurally sound: `merge_contacts()`
+ * (crm.py:1209) and all 6 `_MERGE_BRIDGE_TABLES` were confirmed to have the expected
+ * `patient_id` column in this DB — nothing there explains a failure. This reads more
+ * like a transient Gemini/Vertex hiccup on the LLM side (the "couldn't prepare this
+ * change correctly" wording is Maha's own generic retry-request phrasing for a failed
+ * tool-call attempt), OR a not-yet-understood policy that routes merge specifically to
+ * a support ticket after some kind of retry/failure — not independently confirmed
+ * either way. A second run was intentionally NOT attempted immediately: this test
+ * performs a REAL, irreversible merge of contacts 111/254 if it succeeds, so repeated
+ * runs need a deliberate decision, not an automatic retry loop. Re-run this test
+ * on its own (not as part of a full-suite sweep) before drawing further conclusions.
+ */
 test.describe(
   'TC-CRM07-01 + TC-CRM07-02 + TC-CRM07-04 — merge with Tier-4 confirmation, verify combined survivor profile and the absorbed contact disappearing',
   () => {

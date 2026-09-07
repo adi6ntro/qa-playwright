@@ -84,6 +84,23 @@ function isInFuture(dateStr: string): boolean {
   return new Date(`${dateStr}T00:00:00Z`).getTime() > Date.now();
 }
 
+/**
+ * ⚠️ REAL BUG CONFIRMED (2026-09-07), not a test issue — leaving this FAIL on purpose
+ * rather than loosening the assertion or forcing a retry (an LLM date-math error won't
+ * fix itself on a retry, and a looser check would just hide it):
+ *
+ * Trigger asked for "يوم الأحد القادم الساعة 10 صباحاً" (next Sunday at 10am). Today
+ * is Monday 2026-09-07, so "next Sunday" is unambiguously 2026-09-13. Maha's own chat
+ * reply correctly says so ("...يوم الأحد القادم 13 سبتمبر في الساعة 10 صباحًا") — but
+ * the actual `crm_create_follow_up` tool call it made stored due_date=2026-09-21
+ * instead, which is not even a Sunday (it's a Monday, exactly 2 weeks out). Confirmed
+ * this is NOT a Python bug: `create_follow_up()` (crm.py:826) takes `due_date` as a
+ * plain string parameter and stores it verbatim — there is no server-side date
+ * resolution or validation at all, so the wrong date was computed entirely on the LLM
+ * side, independently of (and inconsistently with) what it told the user. Same failure
+ * family as prior confirm-identity/fabrication gaps documented elsewhere for Maha — the
+ * spoken confirmation and the actual backend write disagree.
+ */
 test.describe('TC-CRM06-01 — create a follow-up with an absolute date', () => {
   test('due_date resolves to an absolute future Sunday; assignee and contact are stored correctly', async ({ browser }) => {
     test.setTimeout(180_000);
@@ -100,7 +117,11 @@ test.describe('TC-CRM06-01 — create a follow-up with an absolute date', () => 
     const clinicId = await page.evaluate(() => (window as any).FO?.clinicId);
     expect(clinicId, 'window.FO.clinicId must be present on the AI Instruction step').toBeTruthy();
 
-    const trigger = `ذكّري ${assigneeName} يتصل بجهة الاتصال رقم ${TEST_CONTACT_ID} يوم الأحد القادم`;
+    // Includes an explicit time — live-reproduced 2026-09-07: a bare "يوم الأحد القادم"
+    // (next Sunday, no time) gets a clarifying question back ("what time exactly?"),
+    // not a created follow-up, since due_date apparently needs a time component. Giving
+    // a time upfront avoids that extra round-trip so this stays a single sendMessage.
+    const trigger = `ذكّري ${assigneeName} يتصل بجهة الاتصال رقم ${TEST_CONTACT_ID} يوم الأحد القادم الساعة 10 صباحاً`;
     const reply = await sendMessage(page, trigger);
 
     recorder.record({
@@ -138,7 +159,7 @@ test.describe('TC-CRM06-01 — create a follow-up with an absolute date', () => 
       evidence:
         `follow_up_found=${!!created} due_date=${created?.due_date} is_absolute_format=${dueDateAbsolute} ` +
         `is_sunday=${dueDateIsSunday} is_future=${dueDateInFuture} assignee_matches=${assigneeMatches}\n` +
-        JSON.stringify(created).slice(0, 400),
+        JSON.stringify(created ?? null).slice(0, 400),
     });
     expect(created, 'a follow-up for this contact/assignee must actually exist').toBeTruthy();
     expect(dueDateAbsolute, 'due_date must be an absolute YYYY-MM-DD date, not a raw relative phrase').toBe(true);

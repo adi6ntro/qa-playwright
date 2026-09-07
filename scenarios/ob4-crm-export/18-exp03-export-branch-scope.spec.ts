@@ -149,11 +149,11 @@ test.describe('TC-EXP03-03 — sensitive-data flags cannot be forced true withou
     const clinicId = await page.evaluate(() => (window as any).FO?.clinicId);
     expect(clinicId).toBeTruthy();
 
-    const searchTrigger = 'ابحثي عن المرضى الذين لم يحجزوا موعدًا منذ 1 يناير 2026';
+    const searchTrigger = 'ابحثي عن المرضى الذين لم يحجزوا موعدًا منذ 1 يونيو 2026';
     const searchReply = await sendMessage(page, searchTrigger);
 
     const directSearch = await callAction(page, clinicId, 'crm_search_contacts', {
-      hasnt_booked_since: '2026-01-01',
+      hasnt_booked_since: '2026-06-01',
       limit: 10,
     });
     const setRef: string | undefined = directSearch?.data?.set_ref;

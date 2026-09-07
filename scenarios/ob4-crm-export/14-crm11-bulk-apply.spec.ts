@@ -104,10 +104,10 @@ test.describe('TC-CRM11-01 — bulk tag returns a real per-row result, not a bar
     // Ground truth: an independent search + bulk_apply via direct callAction, so the
     // per-row CONTRACT (not the chat wording) gets a hard mechanical check.
     const search = await callAction(page, clinicId, 'crm_search_contacts', {
-      hasnt_booked_since: '2026-01-01',
+      hasnt_booked_since: '2026-06-01',
       limit: 1,
     });
-    const total: number = search?.total ?? 0;
+    const total: number = search?.data?.total ?? 0;
 
     if (total === 0) {
       recorder.record({
@@ -115,18 +115,18 @@ test.describe('TC-CRM11-01 — bulk tag returns a real per-row result, not a bar
         tool: 'crm_bulk_apply(operation=add_tag)',
         trigger: searchTrigger,
         result: 'UNABLE_TO_TEST',
-        evidence: `crm_search_contacts(hasnt_booked_since=2026-01-01) returned 0 real contacts this run — nothing to bulk-apply to. search=${JSON.stringify(search).slice(0, 300)}`,
+        evidence: `crm_search_contacts(hasnt_booked_since=2026-06-01) returned 0 real contacts this run — nothing to bulk-apply to. search=${JSON.stringify(search).slice(0, 300)}`,
       });
       test.skip(true, 'no real matching contacts this run — see recorded evidence');
       return;
     }
 
-    const bulk: BulkResult = await callAction(page, clinicId, 'crm_bulk_apply', {
-      set_ref: search.set_ref,
+    const bulk: BulkResult = (await callAction(page, clinicId, 'crm_bulk_apply', {
+      set_ref: search.data.set_ref,
       operation: 'add_tag',
       parameters: { tag: 'QA_CRM11_HOTLEAD' },
       causing_message: '[direct action, ground truth] TC-CRM11-01 bulk tag verification',
-    });
+    })).data;
 
     const shapeOk =
       typeof bulk.total === 'number' &&
@@ -175,10 +175,10 @@ test.describe('TC-CRM11-02 — bulk ownership reassignment, is_reversible always
     const offersUndo = /(تراجع|إلغاء|undo)/i.test(bulkReply.text);
 
     const search = await callAction(page, clinicId, 'crm_search_contacts', {
-      hasnt_booked_since: '2026-01-01',
+      hasnt_booked_since: '2026-06-01',
       limit: 1,
     });
-    const total: number = search?.total ?? 0;
+    const total: number = search?.data?.total ?? 0;
 
     if (total === 0) {
       recorder.record({
@@ -186,18 +186,18 @@ test.describe('TC-CRM11-02 — bulk ownership reassignment, is_reversible always
         tool: 'crm_bulk_apply(operation=set_responsible)',
         trigger: searchTrigger,
         result: 'UNABLE_TO_TEST',
-        evidence: `crm_search_contacts(hasnt_booked_since=2026-01-01) returned 0 real contacts this run. search=${JSON.stringify(search).slice(0, 300)}`,
+        evidence: `crm_search_contacts(hasnt_booked_since=2026-06-01) returned 0 real contacts this run. search=${JSON.stringify(search).slice(0, 300)}`,
       });
       test.skip(true, 'no real matching contacts this run — see recorded evidence');
       return;
     }
 
-    const bulk: BulkResult = await callAction(page, clinicId, 'crm_bulk_apply', {
-      set_ref: search.set_ref,
+    const bulk: BulkResult = (await callAction(page, clinicId, 'crm_bulk_apply', {
+      set_ref: search.data.set_ref,
       operation: 'set_responsible',
       parameters: { assignee_id: String(clinicId) },
       causing_message: '[direct action, ground truth] TC-CRM11-02 bulk reassign verification',
-    });
+    })).data;
 
     const isReversibleFalse = bulk.is_reversible === false;
     const applied = (bulk.changed ?? 0) + (bulk.already_correct ?? 0) === total && (bulk.failed?.length ?? 1) === 0;
@@ -237,7 +237,7 @@ test.describe('TC-CRM11-03 — batching cap: 2000, not 200 — must be announced
       hasnt_booked_since: '2030-01-01',
       limit: 1,
     });
-    const total: number = search?.total ?? 0;
+    const total: number = search?.data?.total ?? 0;
     const CAP = 2000;
 
     if (total <= CAP) {
@@ -261,12 +261,12 @@ test.describe('TC-CRM11-03 — batching cap: 2000, not 200 — must be announced
       return;
     }
 
-    const bulk: BulkResult = await callAction(page, clinicId, 'crm_bulk_apply', {
-      set_ref: search.set_ref,
+    const bulk: BulkResult = (await callAction(page, clinicId, 'crm_bulk_apply', {
+      set_ref: search.data.set_ref,
       operation: 'add_tag',
       parameters: { tag: 'QA_CRM11_CAPTEST' },
       causing_message: '[direct action, ground truth] TC-CRM11-03 cap verification',
-    });
+    })).data;
 
     const rejectedWithCap = bulk.success === false && bulk.error === 'row_limit_exceeded' && bulk.cap === CAP && (bulk.row_count ?? 0) > CAP;
 

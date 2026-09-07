@@ -60,7 +60,7 @@ async function callAction(
   return resp.json();
 }
 
-const SEARCH_PARAMS = { hasnt_booked_since: '2026-01-01', limit: 200 };
+const SEARCH_PARAMS = { hasnt_booked_since: '2026-06-01', limit: 200 };
 
 test.describe('TC-EXP06-01 — export history lists this week\'s exports with full detail', () => {
   test('a fresh set_ref exported twice appears in export_get_audit_trail with all required fields', async ({

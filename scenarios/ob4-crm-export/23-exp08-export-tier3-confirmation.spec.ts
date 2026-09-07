@@ -92,7 +92,7 @@ test.describe('TC-EXP08-01 — TIER 3 confirmation before cross-branch export (s
     // Real chat pass — NEEDS_REVIEW. sendAndConfirm (not a bare sendMessage) in case
     // Maha DOES ask a yes/no confirmation per her prompt instructions; if she doesn't,
     // this behaves exactly like sendMessage (no confirmation prompt to detect, 0 rounds).
-    const searchTrigger = 'ابحثي عن جميع المرضى الذين لم يحجزوا موعدًا منذ 1 يناير 2026 في كل الفروع';
+    const searchTrigger = 'ابحثي عن جميع المرضى الذين لم يحجزوا موعدًا منذ 1 يونيو 2026 في كل الفروع';
     const searchReply = await sendMessage(page, searchTrigger);
     const { replies, confirmRoundsNeeded } = await sendAndConfirm(page, 'صدّري قائمة جهات الاتصال من جميع الفروع');
     const lastReply = replies[replies.length - 1];
@@ -116,7 +116,7 @@ test.describe('TC-EXP08-01 — TIER 3 confirmation before cross-branch export (s
     // does a genuinely multi-branch set_ref produce a spans_branches array with real
     // content in export_result's response.
     const searchResult = await callAction(page, clinicId, 'crm_search_contacts', {
-      hasnt_booked_since: '2026-01-01',
+      hasnt_booked_since: '2026-06-01',
       limit: 500,
     });
     const setRef: string | undefined = searchResult?.data?.set_ref;

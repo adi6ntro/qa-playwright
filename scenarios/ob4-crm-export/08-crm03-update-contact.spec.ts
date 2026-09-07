@@ -267,7 +267,12 @@ test.describe('TC-CRM03-04 — duplicate phone number is rejected, not merged', 
 
 test.describe('TC-CRM03-05 — causing_message is a required field', () => {
   test('crm_update_contact rejects a call with no causing_message — direct call, no chat/LLM involved', async ({ browser }) => {
-    test.setTimeout(60_000);
+    // Bumped from 60_000 — live-reproduced 2026-09-07: even a "cheap" navigation still
+    // waits on gotoAiInstructionStep's full page load, which includes a real WA QR
+    // Guzzle call (up to ~10s) plus OB4 instruction fetch — 60s isn't reliably enough
+    // for the real ob4sa account's heavier clinic data, matching the same headroom
+    // rationale already used everywhere else in this suite.
+    test.setTimeout(180_000);
     test.skip(process.env.TEST_CRM_CAPABILITY_ENABLED !== '1', CRM_CAPABILITY_SKIP_REASON);
     test.skip(!process.env.TEST_CONTACT_ID, 'Set TEST_CONTACT_ID to a real contact id under LOGIN_EMAIL_OB4SA\'s clinic.');
 

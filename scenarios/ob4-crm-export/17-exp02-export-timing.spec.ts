@@ -42,8 +42,8 @@ const EXPORT_CAPABILITY_SKIP_REASON =
   '"phase4Capabilities": {"export": "*", "crm": "*"} (or this test clinic\'s id for each) ' +
   'in your LOCAL reporty-onboard-phase3 config.json and restarting app.py.';
 
-const SEARCH_FILTER = { hasnt_booked_since: '2026-01-01' };
-const SEARCH_TRIGGER = 'ابحثي عن المرضى الذين لم يحجزوا موعدًا منذ 1 يناير 2026';
+const SEARCH_FILTER = { hasnt_booked_since: '2026-06-01' };
+const SEARCH_TRIGGER = 'ابحثي عن المرضى الذين لم يحجزوا موعدًا منذ 1 يونيو 2026';
 
 async function callAction(
   page: import('@playwright/test').Page,
