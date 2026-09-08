@@ -93,7 +93,17 @@ const SEARCH_PARAMS = { hasnt_booked_since: '2026-06-01', limit: 200 };
 
 test.describe('TC-EXP05-01 — contact_list export to PDF/xlsx/CSV (the only testable data type today)', () => {
   test('crm_search_contacts set_ref exports cleanly to all 3 supported formats', async ({ browser }) => {
-    test.setTimeout(180_000);
+    // Bumped from 180_000 — live-reproduced 2026-09-07, 3x in a row: this test hangs
+    // specifically on the LAST of 3 sequential real downloads (always csv, since it's
+    // last in `formats`), never pdf/xlsx. Isolated with a direct curl to the exact same
+    // download_url outside Playwright entirely: it succeeded in ~8.6s (real GCS
+    // round-trip via AgentExportController::download()'s Storage::disk('gcs')-
+    // >readStream(), not a broken endpoint). This points to the LOCAL single-threaded
+    // `php artisan serve` dev server getting backed up by request #3 in one browser
+    // context already carrying a full chat conversation's worth of polling/requests —
+    // an environment/concurrency limitation, not a product bug. More headroom here is
+    // a pragmatic accommodation, not a fix for a real defect.
+    test.setTimeout(300_000);
     test.skip(capabilityGated(), CAPABILITY_SKIP_REASON);
 
     const context = await browser.newContext({ storageState: 'auth/.storage-state.ob4sa.local.json' });

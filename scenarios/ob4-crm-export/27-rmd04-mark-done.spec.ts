@@ -70,6 +70,17 @@ const TEST_BA_USER_ID_SKIP_REASON =
   'Set TEST_BA_USER_ID to the real numeric users.id of the LOGIN_EMAIL_BA account (needed as a real, ' +
   'distinct "person" target) plus LOGIN_EMAIL_BA/LOGIN_PASSWORD_BA itself, and run `npm run login-setup:local-ba`.';
 
+/**
+ * ⚠️ REAL FINDING (2026-09-07), left as FAIL on purpose, same family as
+ * 26-rmd03-cancel-reminder.spec.ts's TC-RMD03-02: Maha replied "أحتاج رقم التذكير أو
+ * اسمه بالضبط" (I need the exact reminder number or name) EVEN THOUGH the trigger gave
+ * the exact real reminder_id explicitly. This is the SECOND independent tool
+ * (cancel AND mark_done) showing the identical symptom for a person-targeted reminder
+ * viewed by its target rather than its creator — strengthens the case this is a real,
+ * systemic gap in how Maha resolves "reminder #<id>" (likely silently scoping its own
+ * lookup to target_type=self reminders only), not a one-off. `list_reminders()` itself
+ * has no such restriction (staff_reminders.py:159+, no acting-identity filter at all).
+ */
 test.describe('TC-RMD04-01 — mark done, individual reminder', () => {
   test('BA (the reminder\'s target) marks a fired reminder done', async ({ browser }) => {
     test.setTimeout(180_000);

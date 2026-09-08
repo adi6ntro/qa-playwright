@@ -110,25 +110,25 @@ test.describe('TC-DSP01-01 — bar chart, group_by=month', () => {
     const clinicId = await page.evaluate(() => (window as any).FO?.clinicId);
 
     const search = await callAction(page, clinicId, 'crm_search_contacts', {
-      hasnt_booked_since: '2025-01-01',
+      hasnt_booked_since: '2026-06-01',
       limit: 500,
     });
     expect(search?.data?.set_ref, 'crm_search_contacts must return a set_ref to chart from').toBeTruthy();
 
     const chart = await callAction(page, clinicId, 'render_chart', {
-      set_ref: search.set_ref,
+      set_ref: search.data.set_ref,
       view: 'bar',
       group_by: 'month',
     });
     expect(chart?.success, 'render_chart must succeed for a bar chart').toBe(true);
-    expect(chart?.rendered).toBe(true);
+    expect(chart?.data?.rendered).toBe(true);
 
     const chartData = await fetchChartData(page, chart.data.chart_id);
 
     recorder.record({
       id: 'TC-DSP01-01-BACKEND',
       tool: 'crm_search_contacts → render_chart(view=bar, group_by=month) — direct calls, bypasses the LLM',
-      trigger: '[direct action, not chat] crm_search_contacts(hasnt_booked_since=2025-01-01) → render_chart(bar, month)',
+      trigger: '[direct action, not chat] crm_search_contacts(hasnt_booked_since=2026-06-01) → render_chart(bar, month)',
       result: chartData?.success && chartData?.chart_type === 'bar' && Array.isArray(chartData?.labels) ? 'PASS' : 'FAIL',
       evidence: JSON.stringify({ chart, chartData }).slice(0, 700),
     });
@@ -144,7 +144,7 @@ test.describe('TC-DSP01-01 — bar chart, group_by=month', () => {
     const page = await context.newPage();
     await gotoAiInstructionStep(page);
 
-    await sendMessage(page, 'أرني جهات الاتصال التي لم يتم حجز موعد لهم منذ 2025-01-01');
+    await sendMessage(page, 'أرني جهات الاتصال التي لم يتم حجز موعد لهم منذ 2026-06-01');
     const before = await chartCardCount(page);
     const reply = await sendMessage(page, 'اعرضي هذه النتائج على شكل مخطط أعمدة حسب الشهر');
     const after = await chartCardCount(page);
@@ -175,13 +175,13 @@ test.describe('TC-DSP01-02 — line chart from the same monthly-trend data', () 
     const clinicId = await page.evaluate(() => (window as any).FO?.clinicId);
 
     const search = await callAction(page, clinicId, 'crm_search_contacts', {
-      hasnt_booked_since: '2025-01-01',
+      hasnt_booked_since: '2026-06-01',
       limit: 500,
     });
     expect(search?.data?.set_ref).toBeTruthy();
 
     const chart = await callAction(page, clinicId, 'render_chart', {
-      set_ref: search.set_ref,
+      set_ref: search.data.set_ref,
       view: 'line',
       group_by: 'month',
     });
@@ -249,7 +249,7 @@ test.describe('TC-DSP01-03 — pie chart rejected above 6 slices (premise-checke
     // >6 slice", assuming the dev data spans that many distinct months). Don't assume;
     // check, same discipline as 07-expected-text-mismatch.spec.ts's drift-premise check.
     const probeChart = await callAction(page, clinicId, 'render_chart', {
-      set_ref: search.set_ref,
+      set_ref: search.data.set_ref,
       view: 'bar',
       group_by: 'month',
     });
@@ -275,7 +275,7 @@ test.describe('TC-DSP01-03 — pie chart rejected above 6 slices (premise-checke
     }
 
     const pieChart = await callAction(page, clinicId, 'render_chart', {
-      set_ref: search.set_ref,
+      set_ref: search.data.set_ref,
       view: 'pie',
       group_by: 'month',
     });

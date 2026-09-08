@@ -156,6 +156,21 @@ test.describe('TC-RMD02-02 / TC-RMD02-03 — branch-scoped list, own branch vs a
     // no FK validated against a branches table anywhere in create_reminder() either.
     const otherBranchId = String(Number(baBranchId) + 900000);
 
+    // ⚠️ REAL BACKEND BUG found here (2026-09-07), not a test issue: `branch_id` can
+    // NEVER be supplied inside `params` — the registry ALWAYS auto-injects its own
+    // `branch_id` keyword (from the session-level context) when calling the
+    // underlying function, regardless of whether the session-level field is itself
+    // set or null. Any `params.branch_id` on top of that crashes every time with
+    // "got multiple values for keyword argument 'branch_id'" — confirmed via 3 direct
+    // curl reproductions (with session branch_id set, with it unset, and finally
+    // omitting params.branch_id entirely, which succeeded and correctly stored the
+    // session-level value). Traced to registrations.py:955-960 (`fn=lambda clinic_id,
+    // ..., branch_id=None, **_: create_reminder(..., branch_id=branch_id)`), invoked
+    // as `fn(clinic_id=..., branch_id=<session value>, **params)` — this affects EVERY
+    // tool registered with this exact lambda shape (any `branch_id` parameter), not
+    // just staff_reminder_create. The only working way to set a reminder's branch is
+    // the session-level field (callAction's 5th `{branchId}` arg) — params.branch_id
+    // is structurally unusable and must never be passed.
     const setupIn = await callAction(
       page,
       clinicId,
@@ -165,17 +180,21 @@ test.describe('TC-RMD02-02 / TC-RMD02-03 — branch-scoped list, own branch vs a
         due_at: tomorrowAt(9),
         message: `${inBranchMarker} in-branch fixture`,
         causing_message: '[direct action, not chat] TC-RMD02-02 setup fixture (own branch)',
-        branch_id: baBranchId,
       },
       { branchId: String(baBranchId) }
     );
-    const setupOther = await callAction(page, clinicId, 'staff_reminder_create', {
-      target_type: 'self',
-      due_at: tomorrowAt(9),
-      message: `${otherBranchMarker} other-branch fixture`,
-      causing_message: '[direct action, not chat] TC-RMD02-03 setup fixture (other branch)',
-      branch_id: otherBranchId,
-    });
+    const setupOther = await callAction(
+      page,
+      clinicId,
+      'staff_reminder_create',
+      {
+        target_type: 'self',
+        due_at: tomorrowAt(9),
+        message: `${otherBranchMarker} other-branch fixture`,
+        causing_message: '[direct action, not chat] TC-RMD02-03 setup fixture (other branch)',
+      },
+      { branchId: otherBranchId }
+    );
     expect(setupIn?.success).toBe(true);
     expect(setupOther?.success).toBe(true);
 

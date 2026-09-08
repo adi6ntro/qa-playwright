@@ -148,6 +148,25 @@ test.describe('TC-RMD03-01 — cancel by the reminder\'s own creator', () => {
 });
 
 test.describe('TC-RMD03-02 — cancel by the reminder\'s target (not the creator)', () => {
+  /**
+   * ⚠️ REAL FINDING (2026-09-07), left as FAIL on purpose — not a test bug, and not
+   * blindly retried (looks like a deterministic LLM-reasoning gap, not transient flake):
+   * Maha replied "لا أرى تذكيرًا برقم <id> في قائمتك" (I don't see that reminder in
+   * your list) when the BA (the reminder's TARGET, not its creator) asked to cancel it
+   * by number, then pivoted to offering to delete an unrelated INSTRUCTION rule
+   * instead. Backend ground truth confirms the reminder genuinely exists and was
+   * NEVER cancelled via chat (`staff_reminder_cancel`'s own second direct attempt
+   * succeeded fresh, not `already_cancelled`). Read `list_reminders()` directly
+   * (staff_reminders.py:159+): it takes NO acting-identity parameter and, when called
+   * with no target filters, returns EVERY active reminder for the whole clinic —
+   * there is no code-level reason a person-targeted reminder should be invisible to
+   * its target. This points to Maha itself silently scoping "my reminders" to
+   * target_type=self only when resolving "reminder #<id>" from a bare number, missing
+   * ones created FOR the asker by someone else — an LLM/prompt reasoning gap, not a
+   * tool bug. Same failure family as the CRM-06 due_date miscalculation
+   * (10-crm06-follow-ups.spec.ts): the model's real behavior disagrees with what a
+   * correct implementation of the underlying tool would support.
+   */
   test('BA (target) can cancel a reminder created FOR them by SA', async ({ browser }) => {
     test.setTimeout(180_000);
     capabilityGate();
