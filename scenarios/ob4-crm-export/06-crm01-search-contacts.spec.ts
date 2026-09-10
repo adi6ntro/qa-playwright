@@ -216,25 +216,31 @@ test.describe('TC-CRM01-03 — branch-scope enforcement on a tag-filtered cross-
 });
 
 test.describe('TC-CRM01-04 — conversation-content matching with disclosure', () => {
-  test('blocked — no CONVERSATION-kind criterion exists in the resolver', async () => {
+  test('blocked — conversation criterion exists but is not wired to crm_search_contacts', async () => {
     recorder.record({
       id: 'TC-CRM01-04',
       tool: 'crm_search_contacts',
       trigger: '(manual only)',
       result: 'UNABLE_TO_TEST',
       evidence:
-        'This TC needs crm_search_contacts to return match_source: "conversation_content" for a query like ' +
-        '"pasien yang pernah bilang \'sakit gigi geraham\' di percakapan". Confirmed by direct read (crm.py:107' +
-        '-140 + segments.py CRITERION_RESOLVERS, 2026-09-06): no criterion type resolves against message/' +
-        'conversation content at all today — v1 deliberately skips CONVERSATION-kind criteria (no message ' +
-        'content indexed anywhere queryable in SQL, needs a tagging/embedding pipeline first, per the same ' +
-        'gap already tracked for Agent Segments\' own criteria resolver). segments.py:248-250 DOES compute a ' +
-        'match_source value ("conversation_content" vs "structured") from CRITERION_KIND, but no criterion ' +
-        'type is ever tagged "conversation" in the current catalog, so that branch is dead code today, not a ' +
-        'reachable behavior. Needs: a conversation-content search pipeline (indexing + a resolver criterion) ' +
-        'before this TC can run for real.',
+        'Still blocked, but the reason changed as of 2026-09-08 (Agent Segments CONVERSATION criteria work) — ' +
+        're-confirmed by direct read 2026-09-10. The 2026-09-06 claim that "no criterion type resolves against ' +
+        'message/conversation content at all today" is now FALSE: segments.py CRITERION_RESOLVERS has a real, ' +
+        'wired `conversation_content_matched` entry (segments.py:66-77, kind="conversation" in CRITERION_KIND) ' +
+        '— NOT dead code, it genuinely filters `p.id IN (patient_ids)`. What actually keeps this TC blocked: ' +
+        'that resolver criterion takes a pre-computed `patient_ids` list, not free text — the SEMANTIC search ' +
+        'over conversation content itself lives in a separate function, ' +
+        '`conversation_search.search_conversation_content()` (new tool built alongside this fix), which is ' +
+        'imported ONLY by `segments_agent.py` (Marketing\'s Agent Segments orchestrator) — confirmed via ' +
+        '`grep -rn conversation_search` across the whole Python codebase, zero references from ' +
+        '`maha_inapp_agent.py` or `registrations.py`. So conversation-content matching is real and reachable ' +
+        'today, just exclusively through Agent Segments\' own chat, not through any Phase 4/Maha tool — ' +
+        '`crm_search_contacts` (crm.py:107-136) still has no `conversation_query`/`patient_ids` param and no ' +
+        'way to invoke the search step itself. Needs: crm_search_contacts (or a new CRM tool) to expose a way ' +
+        'to trigger conversation search and pass its result into this already-working resolver criterion — ' +
+        'the SQL-side plumbing is no longer the gap, only the Phase-4-tool-surface wiring is.',
     });
-    test.skip(true, 'filter not exposed yet — see evidence');
+    test.skip(true, 'not wired to crm_search_contacts yet — see evidence');
   });
 });
 
