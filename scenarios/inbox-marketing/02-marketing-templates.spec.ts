@@ -4,9 +4,10 @@ import { gotoMarketing, openCreateTemplate, fillTemplateForm } from '../../helpe
 /**
  * Covers docs/handover/QA_Checklist_Inbox_Marketing_WhatsApp.md Sections D-E
  * in reporty-web-backup — the parts of Marketing that are actually wired to
- * a backend (Templates CRUD, Contacts list). Campaigns/Segments are covered
- * separately in 03-marketing-campaigns-segments-stub.spec.ts because they're
- * expected to be UI-only right now.
+ * a backend (Templates CRUD, Contacts list). Campaigns are covered separately
+ * in 03-marketing-campaigns-stub.spec.ts (mostly still a stub — see its own
+ * header). Segments has its own real backend now too (2026-09-10) — see
+ * 04-marketing-segments.spec.ts.
  */
 
 test.describe('Marketing — Templates', () => {

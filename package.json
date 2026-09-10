@@ -46,7 +46,9 @@
 
     "test:inbox": "playwright test scenarios/inbox-marketing/01-inbox.spec.ts",
     "test:marketing": "playwright test scenarios/inbox-marketing/02-marketing-templates.spec.ts",
-    "test:stubs": "playwright test scenarios/inbox-marketing/03-marketing-campaigns-segments-stub.spec.ts",
+    "test:stubs": "playwright test scenarios/inbox-marketing/03-marketing-campaigns-stub.spec.ts",
+    "test:segments": "playwright test scenarios/inbox-marketing/04-marketing-segments.spec.ts",
+    "test:segments-local": "BASE_URL=http://localhost:8000 playwright test scenarios/inbox-marketing/04-marketing-segments.spec.ts scenarios/inbox-marketing/05-marketing-segments-local.spec.ts",
     "test:inbox-marketing": "playwright test scenarios/inbox-marketing/",
 
     "test:maha-a": "playwright test scenarios/maha-instructions/02-section-a-reads.spec.ts",

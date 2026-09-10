@@ -156,21 +156,22 @@ test.describe('TC-RMD02-02 / TC-RMD02-03 — branch-scoped list, own branch vs a
     // no FK validated against a branches table anywhere in create_reminder() either.
     const otherBranchId = String(Number(baBranchId) + 900000);
 
-    // ⚠️ REAL BACKEND BUG found here (2026-09-07), not a test issue: `branch_id` can
-    // NEVER be supplied inside `params` — the registry ALWAYS auto-injects its own
-    // `branch_id` keyword (from the session-level context) when calling the
-    // underlying function, regardless of whether the session-level field is itself
-    // set or null. Any `params.branch_id` on top of that crashes every time with
-    // "got multiple values for keyword argument 'branch_id'" — confirmed via 3 direct
-    // curl reproductions (with session branch_id set, with it unset, and finally
-    // omitting params.branch_id entirely, which succeeded and correctly stored the
-    // session-level value). Traced to registrations.py:955-960 (`fn=lambda clinic_id,
-    // ..., branch_id=None, **_: create_reminder(..., branch_id=branch_id)`), invoked
-    // as `fn(clinic_id=..., branch_id=<session value>, **params)` — this affects EVERY
-    // tool registered with this exact lambda shape (any `branch_id` parameter), not
-    // just staff_reminder_create. The only working way to set a reminder's branch is
-    // the session-level field (callAction's 5th `{branchId}` arg) — params.branch_id
-    // is structurally unusable and must never be passed.
+    // ✅ FIXED 2026-09-08 (registry.invoke(), reporty-onboard-phase3) — historical
+    // context kept here since this test was deliberately written to route around the
+    // bug and still does. Real backend bug found 2026-09-07: the registry ALWAYS
+    // auto-injected its own `branch_id` keyword (from session-level context) when
+    // calling the underlying function; any `params.branch_id` supplied on top of that
+    // crashed every time with "got multiple values for keyword argument 'branch_id'"
+    // — confirmed via 3 direct curl reproductions. Traced to registrations.py:955-960
+    // (`fn=lambda clinic_id, ..., branch_id=None, **_: create_reminder(...,
+    // branch_id=branch_id)`), invoked as `fn(clinic_id=..., branch_id=<session
+    // value>, **params)` — affected EVERY tool sharing this lambda shape, not just
+    // staff_reminder_create. Fixed centrally in `registry.invoke()`: `branch_id` is
+    // now stripped from `params` before the `spec.fn(...)` call, so the session-level
+    // value always wins instead of colliding. This test still uses ONLY the
+    // session-level field (callAction's 5th `{branchId}` arg, never
+    // `params.branch_id`) since that remains the correct way to set a reminder's
+    // branch regardless of the fix.
     const setupIn = await callAction(
       page,
       clinicId,

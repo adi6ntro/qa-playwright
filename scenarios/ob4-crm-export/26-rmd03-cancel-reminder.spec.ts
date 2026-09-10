@@ -8,27 +8,47 @@ import '../../helpers/ob4-local-guard'; // throws if BASE_URL isn't local — se
  * TC-RMD03-01..04. See 24-rmd01-self-reminder.spec.ts's header for the shared RMD
  * background.
  *
- * ⚠️ TC-RMD03-03 IS A REAL, CONFIRMED, UNFIXED AUTHORIZATION GAP, NOT AN ORDINARY
- * NEGATIVE TEST. Confirmed by reading `cancel_reminder()`/`mark_reminder_done()`
- * directly (staff_reminders.py:228+) and by the doc's own release-plan callout
- * (QA_TestScript_Phase4_CRM_Export.md lines ~40-54, 2313-2312): both functions scope
- * their `WHERE id = %s AND user_id = %s` check to `user_id = clinic_id` (the clinic
- * OWNER), never to "the specific staff member who created or is targeted by this
- * reminder" — because acting_user_id doesn't reach any tool call yet. Concretely: the
- * tool has NO parameter at all for "who is asking" beyond which clinic. This means any
- * authenticated staff member in the SAME clinic (branch_admin, another branch_admin,
- * anyone) can cancel or mark-done ANY other staff's personal reminder. Not a
- * cross-tenant leak — clinics stay isolated from each other — but a real within-clinic
- * privacy/authorization gap, confirmed still present in code as of 2026-09-06.
+ * ✅ RESOLVED 2026-09-08 (commit `d5eaeb2`, `reporty-onboard-phase3`), re-verified
+ * 2026-09-10 — TC-RMD03-03 used to be a REAL, CONFIRMED authorization gap, not an
+ * ordinary negative test: `cancel_reminder()`/`mark_reminder_done()`
+ * (staff_reminders.py:228+) scoped their `WHERE id = %s AND user_id = %s` check to
+ * `user_id = clinic_id` (the clinic OWNER) only, never to "the specific staff member
+ * who created or is targeted by this reminder" — `acting_user_id` didn't reach any
+ * tool call at all. Concretely: any authenticated staff member in the SAME clinic
+ * could cancel or mark-done ANY other staff's personal reminder. Not a cross-tenant
+ * leak — clinics stayed isolated from each other — but a real within-clinic
+ * privacy/authorization gap, confirmed live via both the chat path and a direct
+ * backend call on 2026-09-07 (see `REPORT_ob4_phase4_qa_bugs_2026-09-08.md` bug #1).
  *
- * TC-RMD03-03 below tests this for real (one staff creates a reminder targeting a
- * second staff, a THIRD staff attempts to cancel it) and reports the actual observed
- * outcome as PASS/FAIL — not softened to NEEDS_REVIEW — per the doc's own instruction:
- * "kalau hasil eksekusi mengonfirmasi staf lain BISA cancel reminder orang lain,
- * laporkan sebagai bug keamanan prioritas tinggi." A second, direct-callAction-only
- * companion test proves the same fact at the tool level, deterministically and
- * independent of any LLM behavior — since the gap is a backend fact, not a prompting
- * one, that direct proof is the most reliable evidence here.
+ * Fix: `acting_user_id` now threads through `handle_message()` → `build_inapp_agent()`
+ * → `make_tools()` → `_inv()` → `registry.invoke()` → every tool's `fn(...)` call. A
+ * new `_authorized_for_reminder()` helper in `staff_reminders.py` rejects any caller
+ * that isn't the reminder's creator, its target, or the clinic owner, with
+ * `not_authorized`. Re-verified through the real chat path after the fix: Staff C
+ * (unauthorized) sent the exact same trigger message, Maha called
+ * `staff_reminder_cancel`, the server rejected it with `not_authorized`, and Maha's
+ * reply reported a genuine failure rather than ever claiming success.
+ *
+ * TC-RMD03-03 below now asserts the FIXED behavior as a hard `expect()` — an
+ * unauthorized third staff member must NEVER be able to cancel someone else's
+ * reminder — so this test now guards against a REGRESSION of a real, previously
+ * live-exploited security gap, not just an observation. A second,
+ * direct-callAction-only companion test proves the same fact at the tool level,
+ * deterministically and independent of any LLM behavior — since the fix lives in the
+ * backend, not the prompt, that direct proof is the most reliable regression guard.
+ *
+ * ⚠️ Unrelated flakiness found during the 2026-09-08 retest, NOT caused by this fix:
+ * TC-RMD03-01 (creator cancels their own reminder — otherwise reliably PASS) failed
+ * once because Maha called the wrong tool entirely (`read_reminder_templates`, an
+ * existing unrelated WhatsApp reminder-*template* feature) instead of
+ * `staff_reminder_cancel` — apparently confusing the two via the shared Arabic word
+ * "تذكير" ("reminder"). Nothing in this fix touches tool selection (only the
+ * authorization check *inside* `cancel_reminder()`, which only runs once the tool is
+ * actually invoked), and the underlying authorization logic still lets a legitimate
+ * cancel through once the right tool is called (confirmed via the direct-backend
+ * check). Treat an occasional TC-RMD03-01 failure as this known LLM
+ * non-determinism/prompt-ambiguity, not a regression of this fix — but if it starts
+ * failing consistently, re-investigate.
  *
  * Account-gap workaround: the doc's setup needs three distinct staff identities
  * (creator, target, unauthorized third party). This suite only had two real
@@ -213,7 +233,7 @@ test.describe('TC-RMD03-02 — cancel by the reminder\'s target (not the creator
   });
 });
 
-test.describe('TC-RMD03-03 — ⚠️ SECURITY GAP VERIFICATION — cancel by an unauthorized third staff member', () => {
+test.describe('TC-RMD03-03 — cancel by an unauthorized third staff member (must be REJECTED)', () => {
   test('chat: a THIRD staff (neither creator nor target) attempts to cancel via the real UI', async ({ browser }) => {
     test.setTimeout(180_000);
     capabilityGate();
@@ -276,19 +296,18 @@ test.describe('TC-RMD03-03 — ⚠️ SECURITY GAP VERIFICATION — cancel by an
       trigger,
       result: gotCancelled ? 'FAIL' : 'PASS',
       evidence: gotCancelled
-        ? `⚠️ SECURITY GAP CONFIRMED (chat path): Staff C (neither creator nor target) successfully cancelled ` +
-          `Ahmad's reminder #${reminderId} via ordinary chat. before_status=${beforeRow?.status} ` +
-          `after_present=${!!afterRow} after_status=${afterRow?.status}. Reply: "${lastReply.text}"`
-        : `Reminder was NOT cancelled by Staff C's chat message (before_status=${beforeRow?.status}, ` +
-          `after_status=${afterRow?.status ?? '(row absent, still active)'}) — either the tool enforced ` +
-          `not_authorized, or Maha declined to even attempt the call; either is a safe outcome for this check. ` +
+        ? `🔴 REGRESSION: Staff C (neither creator nor target) successfully cancelled Ahmad's reminder ` +
+          `#${reminderId} via ordinary chat — the not_authorized fix from 2026-09-08 (commit d5eaeb2) is no ` +
+          `longer holding. before_status=${beforeRow?.status} after_present=${!!afterRow} ` +
+          `after_status=${afterRow?.status}. Reply: "${lastReply.text}"`
+        : `Reminder was correctly NOT cancelled by Staff C's chat message (before_status=${beforeRow?.status}, ` +
+          `after_status=${afterRow?.status ?? '(row absent, still active)'}) — not_authorized fix holding. ` +
           `Reply: "${lastReply.text}"`,
     });
-    // Deliberately NOT asserting a hard expect() here beyond sanity — the whole point
-    // of this TC is to report the OBSERVED outcome (see recorder.record above), not to
-    // fail the suite on a known, already-disclosed gap. The mechanical PASS/FAIL is
-    // carried in the recorded report, which is what a human/CI dashboard consumes.
-    expect(typeof lastReply.text).toBe('string');
+    // Hard assertion (2026-09-10): this used to be a soft, observation-only check
+    // because the gap was known-open at the time — now that it's fixed and committed,
+    // this is a real regression guard for a previously live-exploited security issue.
+    expect(gotCancelled, 'an unauthorized third staff member must NEVER be able to cancel someone else\'s reminder').toBe(false);
     await ba2Context.close();
   });
 
@@ -325,20 +344,20 @@ test.describe('TC-RMD03-03 — ⚠️ SECURITY GAP VERIFICATION — cancel by an
 
     recorder.record({
       id: 'TC-RMD03-03-BACKEND',
-      tool: 'staff_reminder_cancel — direct call, proves the tool-level authorization gap deterministically',
+      tool: 'staff_reminder_cancel — direct call, proves the tool-level authorization check deterministically',
       trigger: `[direct action, not chat] staff_reminder_cancel reminder_id=${reminderId}, no caller identity supplied`,
       result: cancelSucceeded ? 'FAIL' : 'PASS',
       evidence: cancelSucceeded
-        ? `⚠️ SECURITY GAP CONFIRMED (backend-level, deterministic): cancel_reminder() has no not_authorized ` +
-          `check at all as of this run — ANY same-clinic caller can cancel ANY reminder regardless of ` +
-          `creator/target. This will keep failing until acting_user_id reaches this tool call and a ` +
-          `creator-or-target check is added (Phase 2 item #2 in the release plan). ${JSON.stringify(cancelResult)}`
-        : `Cancel was rejected (${JSON.stringify(cancelResult)}) — if this is newly true, the ` +
-          `not_authorized gap documented in staff_reminders.py's docstring may have been fixed; re-read the ` +
-          `source before assuming this result is stale either way.`,
+        ? `🔴 REGRESSION (backend-level, deterministic): cancel_reminder() let this call through with no ` +
+          `caller identity at all — the not_authorized check (_authorized_for_reminder(), staff_reminders.py, ` +
+          `fixed in commit d5eaeb2) is no longer enforcing. ${JSON.stringify(cancelResult)}`
+        : `Cancel was correctly rejected (${JSON.stringify(cancelResult)}) — not_authorized check holding at ` +
+          `the tool level, independent of any LLM/prompt behavior.`,
     });
-    // Deliberately not a hard expect() — see the chat-path test above for why.
-    expect(typeof cancelResult).toBe('object');
+    // Hard assertion (2026-09-10): no caller identity was supplied at all — this
+    // stands in for "any staff member, unauthorized or not" — so the call must be
+    // rejected. Direct regression guard for the fix, bypassing any LLM involvement.
+    expect(cancelSucceeded, 'a call with no caller identity beyond clinic_id must be rejected, not treated as authorized').toBe(false);
     await context.close();
   });
 });

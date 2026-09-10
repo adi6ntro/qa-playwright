@@ -18,16 +18,21 @@ reply read right, is a template actually approved by Meta, etc).
 - **Inbox** (`/customer/inbox`): conversation list, chat history, reply
   send, contact-info save — all live/wired.
 - **Marketing** (`/customer/marketing`): Templates tab (CRUD) and the
-  Contacts *list* — live/wired. **Campaigns and Segments are real, fully
-  loaded UI (multi-step wizard, scripted chat demo) that simply never calls
-  a backend** — `bulk-campaign.js`/`create-segment.js` ARE `<script>`-loaded
-  (each via its own modal partial), confirmed by reading them end to end;
-  they just contain zero `fetch`/`axios` calls. Segments' "Create" button
-  goes further: it has **no click handler at all**, not even a broken one.
-  Same story for Contacts' "+ Add Contact"/"Import CSV" modal — its own
-  submit functions are literally `{ closeAddContact(); }`. `03-marketing-
-  campaigns-*` exercises the real wizard/chat flows end to end and asserts
-  nothing gets sent/saved anywhere, rather than just checking a modal opens.
+  Contacts *list* — live/wired. **Campaigns is still a real, fully loaded UI
+  (multi-step wizard) that mostly never calls a backend past Step 1** —
+  `bulk-campaign.js` IS `<script>`-loaded, confirmed by reading it end to
+  end, but Steps 2-5 are MANUAL-ONLY per that file's own safety note (real
+  Meta template submission + real WhatsApp sends live behind them).
+  **Segments stopped being a stub on 2026-09-10** — `create-segment.js` now
+  drives a real chat orchestrator (`reporty-onboard-phase3`) that resolves
+  criteria against real patient data and persists to the `segments` table;
+  see `04-marketing-segments.spec.ts` (some of its tests are LOCAL-ONLY,
+  covering 2026-09-10 features not yet deployed — see that file's header).
+  Same dead-end story as before for Contacts' "+ Add Contact"/"Import CSV"
+  modal — its own submit functions are literally `{ closeAddContact(); }`.
+  `03-marketing-campaigns-stub.spec.ts` exercises the real wizard flow's
+  Step 1 end to end and asserts nothing gets sent/saved past it, rather than
+  just checking a modal opens.
 - **"Add WhatsApp number" onboarding flow**: no route exists yet
   (`customer/my-clinic/wa-numbers`) — one test asserts it 404s, as a canary
   for when it gets wired up.
@@ -341,8 +346,15 @@ Chrome is installed, no download needed.
 # Inbox + Marketing
 npm run test:inbox            # Inbox: list, chat, reply, contact save
 npm run test:marketing        # Marketing: Templates CRUD, Contacts
-npm run test:stubs            # Confirms Campaigns/Segments/Add-WA-number are still stubs
-npm run test:inbox-marketing  # all three above
+npm run test:stubs            # Confirms Campaigns (past Step 1)/Add-WA-number are still stubs
+npm run test:segments         # Marketing: Segments (MKT-SEG-01..05) — defaults to dev.reporty.sa
+npm run test:segments-local   # ALL of Segments (01..08) against local Laravel + local OB3 — see
+                               # 04/05-marketing-segments*.spec.ts headers; requires
+                               # login-setup:local-ob4sa first (clinic 611, the standard local test
+                               # clinic — NOT login-setup:local's plain default profile, clinic 440).
+                               # Not yet tested against dev.reporty.sa (2026-09-10) — run this one
+                               # for now.
+npm run test:inbox-marketing  # everything above
 
 # Maha AI Instructions
 npm run test:maha-a           # Section A (reads)
