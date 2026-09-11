@@ -8,11 +8,20 @@ import '../../helpers/ob4-local-guard'; // throws if BASE_URL isn't local — se
  * QA_TestScript_Phase4_CRM_Export.md's TC-CRM10-01..03 (lines 1344-1401).
  * Per that doc's Wave 3 note (2026-09-05): real against `crm_audit_log`,
  * which every crm_update_contact/crm_set_responsible/crm_add_note write
- * already logs into (crm.py's get_audit_trail(), ~line 765). Known,
- * documented gap: `author_name` ALWAYS reads as the clinic owner, never the
- * actually-acting staff member (`acting_user_id` doesn't reach the tool
- * layer yet) — the doc is explicit this is not a failure to assert on, just
- * a finding to keep recording.
+ * already logs into (crm.py's get_audit_trail(), ~line 765).
+ *
+ * FIXED 2026-09-10 (was a known, documented gap): `author_name` used to
+ * ALWAYS read as the clinic owner, never the actually-acting staff member,
+ * because `acting_user_id` never reached the tool layer. It now does —
+ * crm.py's `_resolved_author_id()` + registrations.py forwarding the
+ * request's own acting_user_id — end to end through the real chat path
+ * (Laravel's `MyClinicAiController::actingUserId()` = `Auth::id()`, same
+ * Part 3 propagation this suite already covers elsewhere). The tests below
+ * all run as the clinic OWNER (ob4sa), so author_name still legitimately
+ * equals the owner here — that's correct, not the old gap. The
+ * non-owner-staff case (a BA's own id showing up, not the owner's) is
+ * covered separately by TC-CRM05-05 in 05-crm05-add-note.spec.ts, since it
+ * needs a second, non-owner login this file doesn't otherwise use.
  *
  * Reuses TEST_CONTACT_ID=896 ("adi careplan new test") from
  * 05-crm05-add-note.spec.ts — audit trail entries are additive/never
@@ -128,10 +137,12 @@ test.describe('TC-CRM10-01 — audit trail for a name change + tag add', () => {
     const nameCausingMessagePresent = !!nameEntry?.causing_message;
     const tagCausingMessageExact = tagEntry?.causing_message === tagTrigger;
 
-    // Known, documented gap — recorded as a finding, never asserted as a failure
-    // (per the doc's own CRM-10 note): author_name should currently equal the
-    // clinic owner's name on every entry, since acting_user_id never reaches this
-    // tool layer regardless of who's actually chatting.
+    // This whole test runs as the clinic OWNER (ob4sa) — with the 2026-09-10
+    // acting_user_id fix, author_name legitimately equals the owner's own name
+    // here too (acting_user_id correctly resolves to whoever is logged in,
+    // and that's the owner in this file). Recorded for visibility, not
+    // asserted as a gap — see TC-CRM05-05 (05-crm05-add-note.spec.ts) for the
+    // actual non-owner-staff attribution check.
     const authorNamesSeen = Array.from(new Set(entries.map((e) => e.author_name)));
 
     const allMechanicalChecksPass =
@@ -148,7 +159,7 @@ test.describe('TC-CRM10-01 — audit trail for a name change + tag add', () => {
         `name_causing_message_verbatim=${nameEntry?.causing_message === nameTrigger}\n` +
         `tag_entry_found=${!!tagEntry} tag_causing_message_exact=${tagCausingMessageExact}\n` +
         `author_names_seen_across_all_entries=${JSON.stringify(authorNamesSeen)} ` +
-        `(known gap: always the clinic owner, never the acting staff — not asserted here, just recorded)\n` +
+        `(this test runs as the owner, so owner-only is expected and correct post-fix — see TC-CRM05-05 for the non-owner-staff check)\n` +
         `nameReply="${nameReply.text}"\ntagReply="${tagReply.text}"\n\n` +
         JSON.stringify({ nameEntry, tagEntry }).slice(0, 500),
     });

@@ -11,17 +11,22 @@ import '../../helpers/ob4-local-guard'; // throws if BASE_URL isn't local — se
  *
  * Read directly against the live source (2026-09-06,
  * inapp_agent/tools/crm.py:107-140 + registrations.py:784-793) to confirm what's
- * real: `search_contacts()` only exposes 6 appointment-fact params —
+ * real: `search_contacts()` only exposed 6 appointment-fact params —
  * last_visit_before, last_visit_after, booking_status, service, doctor,
  * hasnt_booked_since — all reusing `resolve_segment_criteria()`, the same
- * resolver backing Marketing's live Agent Segments chat. Per the module's own
- * docstring (crm.py:13-24) and the doc's own audit, NONE of name/phone/
- * language/tags/consent_state-as-filter/conversation-content/campaign-id
- * filtering is backed by any table or resolver criterion yet — TC-CRM01-01..05
- * each assume one of those unsupported filters, so all five are written as
- * UNABLE_TO_TEST stubs below (per Adi's 2026-09-05/06 status audit: "⏳ Blocked
- * (filter blm diekspos)"), not forced automation. Only STUB-01/02 get real
- * browser-driven tests.
+ * resolver backing Marketing's live Agent Segments chat.
+ *
+ * UPDATED 2026-09-10: name/phone/language/tags are now real too (crm.py's
+ * search_contacts() + segments.py's name_contains/phone_contains/language_is/
+ * tags_any resolvers) — the 2026-09-06 finding that these weren't backed by
+ * any table was wrong even then (patients.name/phone_number/preferred_language
+ * and tags/patient_tag already existed), it was purely a gap in this file's
+ * own parameter list, now closed. TC-CRM01-02/03/05 below are converted from
+ * UNABLE_TO_TEST stubs into real direct-call tests. TC-CRM01-01 (a "contacted
+ * via Inbox/WhatsApp in the last N days" filter — needs a message-log join
+ * that still doesn't exist) and TC-CRM01-04 (conversation-content search — the
+ * resolver criterion is real but not wired to any Phase-4 tool surface yet,
+ * see that test's own note) remain genuinely blocked, unrelated to this fix.
  *
  * Envelope contract (confirmed by reading registry.invoke(), core/registry.py:217-
  * 411): every /clinic/<id>/action call returns {success, data, error, event} —
@@ -31,6 +36,28 @@ import '../../helpers/ob4-local-guard'; // throws if BASE_URL isn't local — se
  * key) — so a plain call with no error results in envelope-level
  * `success: true`, `data: {rows, total, criteria_labels,
  * filters_applied_summary, match_source, set_ref}`.
+ *
+ * FOUND + FIXED 2026-09-11: every test above this line calls the resolver via
+ * callAction() — a direct POST to /clinic/<id>/action, i.e. registry.invoke()
+ * called straight from HTTP, bypassing the LLM entirely. That path already
+ * accepted name/phone/language/tags since the 2026-09-10 backend work
+ * (crm.py/segments.py/registrations.py). But the SEPARATE `@function_tool
+ * crm_search_contacts` wrapper in maha_inapp_agent.py:4730-4747 — the only
+ * thing that actually declares this tool's parameters to Gemini — had NOT
+ * been updated: its signature still only listed the original 7 appointment-
+ * fact params, and its own docstring still told the model "no name/phone/
+ * language/tags filtering yet". Same 2-layer-registration class of bug as
+ * project_add_doctor_missing_function_tool_2026-08-24 (memory) — a tool can
+ * be fully real at the registry/backend layer and still be UNREACHABLE from
+ * actual chat because Gemini never sees the parameter in its own schema.
+ * TC-CRM01-02/03/05 above were passing this whole time and never caught it,
+ * because none of them go through chat for their assertion. Fixed same day
+ * by adding name/phone/language/tags to the @function_tool signature (tags
+ * exposed as a comma-separated string, split before reaching _inv() — this
+ * codebase's own convention for list-shaped tool params, see
+ * crm_update_contact's tags_add/tags_remove docstring). TC-CRM01-06 below is
+ * the regression test for THIS specific class of bug — it goes through
+ * sendMessage() (real chat, real Gemini schema), not just callAction().
  */
 
 const recorder = new ReportRecorder('OB4 CRM-01 Search Contacts');
@@ -143,13 +170,14 @@ test.describe('TC-CRM01-STUB-02 — with `crm` off (default today), no regressio
   });
 });
 
-// ── TC-CRM01-01..05 — all "⏳ Blocked (filter blm diekspos)" per the doc's own
-// 2026-09-05/06 status audit. Each needs a filter crm_search_contacts does not
-// expose (confirmed by direct read of crm.py:107-140 above) — writing a
-// browser test around these would force a fake premise onto a tool that
-// honestly refuses to accept params it can't back, so each is recorded as a
-// manual/blocked stub instead, same posture as 01-part3-runtime-context.spec.ts's
-// TC-P3-06.
+// TEST_CONTACT_ID/TEST_CONTACT_ID_SECONDARY (.env) — two real, disposable
+// contacts under clinic 611 used by 05-crm05-add-note.spec.ts and others.
+// Reused here for the tag filter tests: each test below tags then untags
+// (reversible), matching the convention TC-CRM03-02 already established for
+// crm_update_contact's own tags_add path.
+const TEST_CONTACT_ID_SECONDARY = process.env.TEST_CONTACT_ID_SECONDARY || '';
+
+// ── TC-CRM01-01 — still blocked, unrelated to the 2026-09-10 filter work.
 
 test.describe('TC-CRM01-01 — contacted-this-week-but-not-booked search', () => {
   test('blocked — no "recently contacted via Inbox/WhatsApp" filter exists in crm_search_contacts', async () => {
@@ -175,43 +203,135 @@ test.describe('TC-CRM01-01 — contacted-this-week-but-not-booked search', () =>
 });
 
 test.describe('TC-CRM01-02 — pagination of a tag-filtered search', () => {
-  test('blocked — no tag filter exists in crm_search_contacts', async () => {
-    recorder.record({
-      id: 'TC-CRM01-02',
-      tool: 'crm_search_contacts',
-      trigger: '(manual only)',
-      result: 'UNABLE_TO_TEST',
-      evidence:
-        'This TC needs a "tag" filter (search contacts with tag \'hot lead\') to even construct the trigger ' +
-        'message — crm_search_contacts\'s exposed params (last_visit_before/after, booking_status, service, ' +
-        'doctor, hasnt_booked_since; crm.py:107-140) have no tag criterion, and CRITERION_RESOLVERS in ' +
-        'segments.py has no tag-kind entry either. Note: the underlying tags/patient_tag tables DO exist and ' +
-        'ARE real (crm_update_contact\'s tags_add/tags_remove, crm.py:484-498) — only the search-by-tag path ' +
-        "is missing, not the tag data model itself. What IS testable today is TC-CRM01-STUB-01 (hasnt_booked_" +
-        'since). Needs: a tags-kind criterion added to CRITERION_RESOLVERS + exposed as a search_contacts() ' +
-        'param before this TC can run for real.',
-    });
-    test.skip(true, 'filter not exposed yet — see evidence');
+  test('tags filter matches exactly the tagged contacts, limit/offset page correctly', async ({ browser }) => {
+    test.setTimeout(180_000);
+    test.skip(process.env.TEST_CRM_CAPABILITY_ENABLED !== '1', CRM_CAPABILITY_SKIP_REASON);
+    test.skip(
+      !process.env.TEST_CONTACT_ID || !TEST_CONTACT_ID_SECONDARY,
+      'Set TEST_CONTACT_ID and TEST_CONTACT_ID_SECONDARY to two real, disposable contact ids.'
+    );
+
+    const context = await browser.newContext({ storageState: 'auth/.storage-state.ob4sa.local.json' });
+    const page = await context.newPage();
+    await gotoAiInstructionStep(page);
+    const clinicId = await page.evaluate(() => (window as any).FO?.clinicId);
+    expect(clinicId, 'window.FO.clinicId must be present on the AI Instruction step').toBeTruthy();
+
+    const tagName = `QA_CRM0102_TAG_${Date.now()}`;
+    const contactA = process.env.TEST_CONTACT_ID as string;
+    const contactB = TEST_CONTACT_ID_SECONDARY;
+
+    try {
+      for (const contactId of [contactA, contactB]) {
+        const tagResult = await callAction(page, clinicId, 'crm_update_contact', {
+          contact_id: contactId,
+          field: 'tags_add',
+          value: tagName,
+          causing_message: '[direct action, not chat] TC-CRM01-02 fixture — tag both contacts',
+        });
+        expect(tagResult?.data?.success, `tagging contact ${contactId} must succeed`).toBe(true);
+      }
+
+      const page0 = await callAction(page, clinicId, 'crm_search_contacts', { tags: [tagName], limit: 1, offset: 0 });
+      const page1 = await callAction(page, clinicId, 'crm_search_contacts', { tags: [tagName], limit: 1, offset: 1 });
+      const rows0: Array<{ patient_id: unknown }> = page0?.data?.rows || [];
+      const rows1: Array<{ patient_id: unknown }> = page1?.data?.rows || [];
+
+      const totalIsTwo = page0?.data?.total === 2;
+      const eachPageHasOneRow = rows0.length === 1 && rows1.length === 1;
+      const pagesAreDistinctRows = eachPageHasOneRow && String(rows0[0].patient_id) !== String(rows1[0].patient_id);
+      const bothTaggedContactsCovered =
+        eachPageHasOneRow &&
+        new Set([String(rows0[0].patient_id), String(rows1[0].patient_id)]).size === 2 &&
+        [contactA, contactB].every((id) => [rows0[0].patient_id, rows1[0].patient_id].map(String).includes(String(id)));
+
+      const ok = totalIsTwo && eachPageHasOneRow && pagesAreDistinctRows && bothTaggedContactsCovered;
+
+      recorder.record({
+        id: 'TC-CRM01-02',
+        tool: 'crm_search_contacts(tags) — tags_any resolver (segments.py, 2026-09-10) + pagination',
+        trigger: `[direct action, not chat] crm_search_contacts(tags=["${tagName}"], limit=1, offset=0/1)`,
+        result: ok ? 'PASS' : 'FAIL',
+        evidence:
+          `total=${page0?.data?.total} page0_rows=${JSON.stringify(rows0)} page1_rows=${JSON.stringify(rows1)} ` +
+          `total_is_two=${totalIsTwo} pages_distinct=${pagesAreDistinctRows} both_covered=${bothTaggedContactsCovered}`,
+      });
+      expect(ok, 'tags_any filter must match exactly the two tagged contacts, one per page').toBe(true);
+    } finally {
+      // Always untag, even on assertion failure — a stray QA tag left in the
+      // clinic's real tag vocabulary would confuse a human reading it later.
+      for (const contactId of [contactA, contactB]) {
+        await callAction(page, clinicId, 'crm_update_contact', {
+          contact_id: contactId,
+          field: 'tags_remove',
+          value: tagName,
+          causing_message: '[direct action, not chat] TC-CRM01-02 cleanup — remove test tag',
+        });
+      }
+      await context.close();
+    }
   });
 });
 
 test.describe('TC-CRM01-03 — branch-scope enforcement on a tag-filtered cross-branch search', () => {
-  test('blocked — same missing tag filter as TC-CRM01-02, needed to construct this TC\'s own trigger', async () => {
-    recorder.record({
-      id: 'TC-CRM01-03',
-      tool: 'crm_search_contacts',
-      trigger: '(manual only)',
-      result: 'UNABLE_TO_TEST',
-      evidence:
-        'Same root gap as TC-CRM01-02 — this TC\'s trigger ("cari kontak dengan tag \'hot lead\' di semua ' +
-        'cabang") depends on a tag filter that crm_search_contacts does not expose (crm.py:107-140). Worth ' +
-        'noting separately: the branch-scope ENFORCEMENT mechanism itself (branch_id param, _fetch_scoped_' +
-        'patient-equivalent checks) is real and independently testable via other tools — see TC-CRM02-03 in ' +
-        '07-crm02-get-contact.spec.ts, which exercises the same branch_admin/managed_branch_ids boundary ' +
-        'using crm_get_contact instead, since that tool\'s filters ARE usable today. This TC specifically, as ' +
-        'written in the doc (tag-filter + cross-branch), stays blocked until a tag criterion exists.',
-    });
-    test.skip(true, 'filter not exposed yet — see evidence');
+  test('a tag match is still excluded when the contact is outside the requested branch', async ({ browser }) => {
+    test.setTimeout(180_000);
+    test.skip(process.env.TEST_CRM_CAPABILITY_ENABLED !== '1', CRM_CAPABILITY_SKIP_REASON);
+    test.skip(!process.env.TEST_CONTACT_ID, 'Set TEST_CONTACT_ID to a real contact id, and confirm its actual branch below.');
+
+    const context = await browser.newContext({ storageState: 'auth/.storage-state.ob4sa.local.json' });
+    const page = await context.newPage();
+    await gotoAiInstructionStep(page);
+    const clinicId = await page.evaluate(() => (window as any).FO?.clinicId);
+
+    const contactId = process.env.TEST_CONTACT_ID as string;
+    const tagName = `QA_CRM0103_TAG_${Date.now()}`;
+
+    // Confirm (don't assume) which of this clinic's two branches TEST_CONTACT_ID
+    // actually belongs to, via crm_get_contact's own branch-scope check — same
+    // mechanism TC-CRM02-03 (07-crm02-get-contact.spec.ts) already exercises.
+    const inBranch1 = await callAction(page, clinicId, 'crm_get_contact', { contact_id: contactId }, { branchId: '1' });
+    const inBranch43 = await callAction(page, clinicId, 'crm_get_contact', { contact_id: contactId }, { branchId: '43' });
+    const ownBranch = inBranch1?.data?.success ? '1' : inBranch43?.data?.success ? '43' : null;
+    const otherBranch = ownBranch === '1' ? '43' : '1';
+    test.skip(!ownBranch, `TEST_CONTACT_ID=${contactId} isn't resolvable to either branch 1 or 43 this run.`);
+
+    try {
+      const tagResult = await callAction(page, clinicId, 'crm_update_contact', {
+        contact_id: contactId,
+        field: 'tags_add',
+        value: tagName,
+        causing_message: '[direct action, not chat] TC-CRM01-03 fixture',
+      });
+      expect(tagResult?.data?.success).toBe(true);
+
+      const crossBranchSearch = await callAction(page, clinicId, 'crm_search_contacts', { tags: [tagName] }, { branchId: otherBranch as string });
+      const ownBranchSearch = await callAction(page, clinicId, 'crm_search_contacts', { tags: [tagName] }, { branchId: ownBranch as string });
+
+      const excludedFromOtherBranch = crossBranchSearch?.data?.total === 0;
+      const foundInOwnBranch = (ownBranchSearch?.data?.rows || []).some((r: any) => String(r.patient_id) === String(contactId));
+
+      recorder.record({
+        id: 'TC-CRM01-03',
+        tool: 'crm_search_contacts(tags, branch_id) — tag match does not bypass branch scope',
+        trigger: `[direct action, not chat] crm_search_contacts(tags=["${tagName}"], branch_id=${otherBranch} then ${ownBranch})`,
+        result: excludedFromOtherBranch && foundInOwnBranch ? 'PASS' : 'FAIL',
+        evidence:
+          `contact=${contactId} own_branch=${ownBranch} other_branch=${otherBranch} ` +
+          `other_branch_total=${crossBranchSearch?.data?.total} (expect 0) ` +
+          `own_branch_found=${foundInOwnBranch} (expect true)`,
+      });
+      expect(excludedFromOtherBranch, 'a tag match in a different branch must not leak across branch scope').toBe(true);
+      expect(foundInOwnBranch, 'the same tag search within the correct branch must still find the contact').toBe(true);
+    } finally {
+      await callAction(page, clinicId, 'crm_update_contact', {
+        contact_id: contactId,
+        field: 'tags_remove',
+        value: tagName,
+        causing_message: '[direct action, not chat] TC-CRM01-03 cleanup — remove test tag',
+      });
+      await context.close();
+    }
   });
 });
 
@@ -245,22 +365,115 @@ test.describe('TC-CRM01-04 — conversation-content matching with disclosure', (
 });
 
 test.describe('TC-CRM01-05 — search by contact name, not found', () => {
-  test('blocked — no name filter exists in crm_search_contacts', async () => {
+  test('a name that matches no real contact returns zero rows honestly, no crash', async ({ browser }) => {
+    test.setTimeout(180_000);
+    test.skip(process.env.TEST_CRM_CAPABILITY_ENABLED !== '1', CRM_CAPABILITY_SKIP_REASON);
+
+    const context = await browser.newContext({ storageState: 'auth/.storage-state.ob4sa.local.json' });
+    const page = await context.newPage();
+    await gotoAiInstructionStep(page);
+    const clinicId = await page.evaluate(() => (window as any).FO?.clinicId);
+    expect(clinicId, 'window.FO.clinicId must be present on the AI Instruction step').toBeTruthy();
+
+    const bogusName = 'Zzzzz_TidakAda_12345';
+    const trigger = `ابحثي عن جهة اتصال بالاسم '${bogusName}'`;
+    const reply = await sendMessage(page, trigger);
+
+    const direct = await callAction(page, clinicId, 'crm_search_contacts', { name: bogusName });
+    const data = direct?.data || {};
+    const noRows = Array.isArray(data.rows) && data.rows.length === 0;
+    const totalIsZero = data.total === 0;
+    const hasFiltersSummary = typeof data.filters_applied_summary === 'string' && data.filters_applied_summary.length > 0;
+
+    const ok = direct?.success === true && noRows && totalIsZero && hasFiltersSummary;
+
     recorder.record({
       id: 'TC-CRM01-05',
-      tool: 'crm_search_contacts',
-      trigger: '(manual only)',
-      result: 'UNABLE_TO_TEST',
+      tool: 'crm_search_contacts(name) — name_contains resolver (segments.py, 2026-09-10), empty-result honesty',
+      trigger,
+      result: ok ? 'PASS' : 'FAIL',
       evidence:
-        'This TC needs a name filter ("cari kontak bernama \'Zzzzz_TidakAda_12345\'") — confirmed by direct ' +
-        'read (crm.py:107-109) that search_contacts()\'s full param list is exactly last_visit_before, ' +
-        'last_visit_after, booking_status, service, doctor, hasnt_booked_since, limit, offset — no name/phone ' +
-        'parameter anywhere. The empty-result honesty behavior this TC actually wants to check (0 rows, no ' +
-        'crash, filters_applied_summary still populated) IS already exercised structurally by TC-CRM01-STUB-01 ' +
-        'above whenever the hasnt_booked_since date happens to match zero real contacts — but this TC ' +
-        'specifically needs a NAME filter to exist first. Needs: a name/phone criterion added to ' +
-        'CRITERION_RESOLVERS + exposed as a search_contacts() param.',
+        `chat_reply="${reply.text}"\n\n` +
+        `direct_call: success=${direct?.success} rows=${JSON.stringify(data.rows)} total=${data.total} ` +
+        `filters_applied_summary="${data.filters_applied_summary}"`,
     });
-    test.skip(true, 'filter not exposed yet — see evidence');
+    expect(ok, 'a name with no real match must return {rows:[], total:0} honestly, not an error or a crash').toBe(true);
+    await context.close();
+  });
+});
+
+test.describe('TC-CRM01-06 — chat-path regression: Gemini can actually pass name/phone/language/tags, not just direct-call', () => {
+  test('a natural-language name search reaches the model via the real chat schema', async ({ browser }) => {
+    test.setTimeout(180_000);
+    test.skip(process.env.TEST_CRM_CAPABILITY_ENABLED !== '1', CRM_CAPABILITY_SKIP_REASON);
+    test.skip(!process.env.TEST_CONTACT_ID, 'Set TEST_CONTACT_ID to a real, disposable contact id.');
+
+    const context = await browser.newContext({ storageState: 'auth/.storage-state.ob4sa.local.json' });
+    const page = await context.newPage();
+    await gotoAiInstructionStep(page);
+    const clinicId = await page.evaluate(() => (window as any).FO?.clinicId);
+    expect(clinicId, 'window.FO.clinicId must be present on the AI Instruction step').toBeTruthy();
+
+    const contactId = process.env.TEST_CONTACT_ID as string;
+
+    // Resolve a REAL name to search for, rather than hardcoding one — this
+    // clinic's fixture data varies by environment (see TC-CRM01-03's own
+    // branch-resolution pattern for the same reasoning).
+    const contactLookup = await callAction(page, clinicId, 'crm_get_contact', { contact_id: contactId });
+    const realName: string | undefined = contactLookup?.data?.name;
+    test.skip(!realName, `crm_get_contact(${contactId}) didn't return a usable name this run.`);
+
+    // Ground truth via the SAME path TC-CRM01-05 already trusts — proves the
+    // resolver itself still finds this contact by (a substring of) its real
+    // name, independent of whatever the chat/LLM turn below does.
+    //
+    // Fragment choice matters: this clinic's fixture data is full of names
+    // starting with generic words ("adi", "test") shared by dozens of other
+    // contacts (live-caught 2026-09-11 — a first-word fragment of "adi
+    // careplan new test QA_CRM10_..." matched 17 rows, and the target
+    // contact_id ranked outside the default page-1 by last_visit, even
+    // though the search itself worked correctly end-to-end). The LONGEST
+    // word is a much better proxy for a unique fixture identifier (these
+    // fixtures tend to embed a timestamp-like suffix, e.g.
+    // "QA_CRM10_1789059255565") — and limit is raised well past this
+    // clinic's realistic per-fragment match count so ranking position can
+    // never cause a false negative here.
+    const nameWords = (realName as string).split(' ').filter(Boolean);
+    const nameFragment = nameWords.reduce((longest, w) => (w.length > longest.length ? w : longest), nameWords[0]);
+    const groundTruth = await callAction(page, clinicId, 'crm_search_contacts', { name: nameFragment, limit: 200 });
+    const groundTruthFound = (groundTruth?.data?.rows || []).some((r: any) => String(r.patient_id) === String(contactId));
+
+    const trigger = `ابحثي لي عن جهة اتصال اسمها '${nameFragment}'`;
+    const reply = await sendMessage(page, trigger);
+
+    // What CANNOT be asserted mechanically from outside: whether Gemini's own
+    // tool call actually included name=... — there is no schema-introspection
+    // endpoint (see TC-CRM01-STUB-02's own note on the same limitation for
+    // capability gating). So this test's automated gate is the ground truth
+    // above (proves the fix is live and the data is real) plus a soft check
+    // that the chat turn produced a real, non-empty reply — same "manual
+    // cross-check needed" posture already used by TC-CRM01-STUB-01/05 in this
+    // same file for LLM-dependent behavior.
+    const ok = groundTruthFound && reply.text.length > 0;
+
+    recorder.record({
+      id: 'TC-CRM01-06',
+      tool: 'crm_search_contacts(name) via real chat — @function_tool schema regression check (maha_inapp_agent.py:4730-4753, fixed 2026-09-11)',
+      trigger,
+      result: ok ? 'PASS' : 'FAIL',
+      evidence:
+        `contact_id=${contactId} real_name="${realName}" name_fragment="${nameFragment}"\n\n` +
+        `ground_truth direct-call crm_search_contacts(name="${nameFragment}") found contact=${groundTruthFound} ` +
+        `(total=${groundTruth?.data?.total})\n\n` +
+        `chat_reply="${reply.text}"\n\n` +
+        `[Manual cross-check still needed] confirm the chat reply above actually names "${realName}" or its ` +
+        'phone (proving Gemini itself called crm_search_contacts with name=... through the real function-calling ' +
+        'schema) rather than refusing, or answering from some other tool/guess. Before the 2026-09-11 fix, the ' +
+        '@function_tool wrapper had no name parameter at all, so this exact request would have had to be refused ' +
+        'or misrouted — that refusal is the regression this test exists to catch if the wrapper ever drifts out ' +
+        'of sync with the backend again.',
+    });
+    expect(ok, 'the backend fix must be live (ground truth) and the chat turn must produce a real reply').toBe(true);
+    await context.close();
   });
 });

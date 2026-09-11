@@ -103,7 +103,7 @@ test.describe('TC-CRM05-01 + TC-CRM05-02 — add note via chat, verify via direc
 
     recorder.record({
       id: 'TC-CRM05-01',
-      tool: 'crm_add_note(contact_id, text, causing_message) — author_id/written_at are not caller-settable params in add_note()\'s own signature, so that part of the spec is structurally guaranteed, not independently re-verified here',
+      tool: 'crm_add_note(contact_id, text, causing_message) — written_at is not a caller-settable param in add_note()\'s own signature, so that part of the spec is structurally guaranteed, not independently re-verified here. author_id used to be the same story, but as of 2026-09-10 it resolves from the request\'s own top-level acting_user_id (see TC-CRM05-05 below) rather than being fully internal — a chat call carries no acting_user_id today (Part 3\'s runtime-context propagation doesn\'t thread it into the chat turn yet), so this chat-driven note still falls back to the clinic owner, same as before.',
       trigger,
       result: 'NEEDS_REVIEW',
       evidence: reply.text,
@@ -170,6 +170,71 @@ test.describe('TC-CRM05-03 — edit/delete rejected (append-only)', () => {
     });
     expect(originalStillPresentUnchanged, 'the original note must still be present, byte-for-byte, unchanged').toBe(true);
     await context.close();
+  });
+});
+
+test.describe('TC-CRM05-05 — author_id attributes to the acting staff, not the clinic owner', () => {
+  test('a note added by a BA over real chat is audited under the BA, not the owner', async ({ browser }) => {
+    // 2026-09-10: crm_add_note (and 6 sibling CRM writers) started accepting
+    // acting_user_id, resolved via inapp_agent.tools.crm._resolved_author_id()
+    // and forwarded end-to-end: Laravel's MyClinicAiController::actingUserId()
+    // (Auth::id() of whoever is actually logged in) -> Python chat() ->
+    // registry.invoke() -> crm_add_note(acting_user_id=...). This is the FULL
+    // real path (not registry.invoke() called directly) — the same Part 3
+    // runtime-context propagation already covers acting_user_id, it just
+    // wasn't threaded into individual CRM tool calls until now. Before this
+    // fix, this exact test would have shown author_id=<clinic owner>
+    // regardless of which staff member sent the message.
+    test.setTimeout(180_000);
+    test.skip(process.env.TEST_CRM_CAPABILITY_ENABLED !== '1', CRM_CAPABILITY_SKIP_REASON);
+    test.skip(!process.env.TEST_CONTACT_ID, 'Set TEST_CONTACT_ID to a real contact id under LOGIN_EMAIL_OB4SA\'s clinic.');
+    test.skip(
+      !process.env.LOGIN_EMAIL_BA || !process.env.TEST_BA_USER_ID,
+      'Set LOGIN_EMAIL_BA/LOGIN_PASSWORD_BA (see auth/login-setup.ts) and TEST_BA_USER_ID to the real ' +
+        'numeric users.id backing that account — needed to tell the BA\'s id apart from the clinic owner\'s ' +
+        'in the audit trail assertion below.'
+    );
+
+    const baContext = await browser.newContext({ storageState: 'auth/.storage-state.ba.local.json' });
+    const baPage = await baContext.newPage();
+    await gotoAiInstructionStep(baPage);
+    const clinicId = await baPage.evaluate(() => (window as any).FO?.clinicId);
+    expect(clinicId, 'window.FO.clinicId must be present on the AI Instruction step').toBeTruthy();
+
+    const marker = 'QA_CRM0505_AUTHOR_MARK';
+    const trigger = `أضيفي ملاحظة على جهة الاتصال رقم ${TEST_CONTACT_ID}: ${marker} — ملاحظة اختبار عبر حساب الموظف`;
+    const reply = await sendMessage(baPage, trigger);
+
+    const auditResult = await callAction(baPage, clinicId, 'crm_get_audit_trail', {
+      contact_id: TEST_CONTACT_ID,
+      limit: 5,
+    });
+    const entries: Array<{ action?: string; causing_message?: string; author_id?: unknown; author_name?: unknown }> =
+      auditResult?.data?.entries || [];
+    // Matched against causing_message (the verbatim trigger), not new_value (the
+    // LLM-extracted note text) — live-caught 2026-09-10: Maha silently dropped
+    // the ASCII marker + its leading dash when parsing the Arabic sentence into
+    // add_note's own `text` param, same "paraphrases freely" behavior this
+    // file's header comment already warns about for causing_message itself
+    // (except causing_message is passed through verbatim, unlike `text`).
+    const ourEntry = entries.find((e) => e.action === 'note_add' && typeof e.causing_message === 'string' && e.causing_message.includes(marker));
+    const authorIsBa = String(ourEntry?.author_id) === String(process.env.TEST_BA_USER_ID);
+    const ownerIdFallback = clinicId; // what author_id would have been before this fix
+
+    recorder.record({
+      id: 'TC-CRM05-05',
+      tool: 'crm_add_note via real chat (BA account) + crm_get_audit_trail — acting_user_id -> author_id plumbing (crm.py _resolved_author_id, 2026-09-10)',
+      trigger,
+      result: ourEntry && authorIsBa ? 'PASS' : 'FAIL',
+      evidence:
+        `reply="${reply.text}"\n` +
+        `audit_entry_found=${!!ourEntry} author_id=${ourEntry?.author_id} author_name="${ourEntry?.author_name}" ` +
+        `expected_ba_user_id=${process.env.TEST_BA_USER_ID} clinic_owner_id_would_have_been=${ownerIdFallback}\n\n` +
+        JSON.stringify(ourEntry),
+    });
+    expect(ourEntry, 'the note must appear in crm_get_audit_trail').toBeTruthy();
+    expect(authorIsBa, `author_id (${ourEntry?.author_id}) must be the acting BA's own id (${process.env.TEST_BA_USER_ID}), not the clinic owner's`).toBe(true);
+    await baContext.close();
   });
 });
 
