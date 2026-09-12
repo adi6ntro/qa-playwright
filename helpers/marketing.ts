@@ -36,16 +36,38 @@ export async function openCreateSegment(page: Page) {
   await expect(page.locator('#modal-create-segment')).toHaveClass(/open/);
 }
 
+/** Waits for the Segments tab's own list fetch (fetchMktSegments() in
+ * marketing.js) to actually finish populating `window.MKT_SEGMENTS`, rather
+ * than the tab container merely being visible — `gotoMarketing()` only
+ * confirms `#tab-segments` is on screen, which happens before that XHR
+ * resolves. A row count read right after `gotoMarketing()` with no further
+ * wait can catch the transient "No segments yet" placeholder row (rendered
+ * whenever `MKT_SEGMENTS` is still `[]`) instead of the real list — live-
+ * caught 2026-09-12 in MKT-SEG-08 once clinic 611 had enough segments for the
+ * fetch to take a moment. Clinic 611 always has at least one real segment in
+ * practice, so `.length > 0` is a safe wait condition here. */
+export async function waitForSegmentsListLoaded(page: Page) {
+  await page.waitForFunction(() => Array.isArray((window as any).MKT_SEGMENTS) && (window as any).MKT_SEGMENTS.length > 0);
+}
+
 /** Opens an existing segment's row "Edit" link — scoped by the segment's
- * current name so it targets the right row regardless of list order. */
+ * current name so it targets the right row regardless of list order.
+ * `openEditSegment()` (create-segment.js) fires two independent GETs — plain
+ * segment detail (criteria/keep_updating) AND `/contacts` (the member list,
+ * wired 2026-09-12 — previously the edit modal never fetched this at all, so
+ * it showed a count with an empty list beneath it). Both are awaited here so
+ * a caller asserting on the modal's rendered contact list never races either
+ * request. Returns `{ detailResp, contactsResp }` — MKT-SEG-08 (pre-2026-09-12)
+ * ignores the return value entirely, so widening it here is safe. */
 export async function openEditSegment(page: Page, segmentName: string) {
   const row = page.locator('#tbl-segments-body tr', { hasText: segmentName });
-  const [resp] = await Promise.all([
+  const [detailResp, contactsResp] = await Promise.all([
     page.waitForResponse((r) => /\/segments\/\d+$/.test(r.url()) && r.request().method() === 'GET'),
+    page.waitForResponse((r) => /\/segments\/\d+\/contacts$/.test(r.url()) && r.request().method() === 'GET'),
     row.locator('a', { hasText: 'Edit' }).click(),
   ]);
   await expect(page.locator('#modal-create-segment')).toHaveClass(/open/);
-  return resp;
+  return { detailResp, contactsResp };
 }
 
 /** Opens an existing segment's row "Send Campaign" link — resolves that

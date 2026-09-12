@@ -5,6 +5,7 @@ import {
   openEditSegment,
   openSendCampaignForSegment,
   sendSegmentMessage,
+  waitForSegmentsListLoaded,
 } from '../../helpers/marketing';
 
 /**
@@ -183,6 +184,7 @@ test.describe('Marketing — Segments: keep_updating, Send Campaign, Edit (LOCAL
 
     await page.reload();
     await gotoMarketing(page, 'segments');
+    await waitForSegmentsListLoaded(page);
     const rowCountBefore = await page.locator('#tbl-segments-body tr').count();
 
     await openEditSegment(page, segmentName);
@@ -217,7 +219,92 @@ test.describe('Marketing — Segments: keep_updating, Send Campaign, Edit (LOCAL
     await gotoMarketing(page, 'segments');
     await expect(page.locator('#tbl-segments-body', { hasText: editedName })).toBeVisible({ timeout: 20_000 });
     await expect(page.locator('#tbl-segments-body', { hasText: segmentName, hasNotText: editedName })).toHaveCount(0);
+    await waitForSegmentsListLoaded(page);
     const rowCountAfter = await page.locator('#tbl-segments-body tr').count();
     expect(rowCountAfter).toBe(rowCountBefore);
+  });
+
+  test('MKT-SEG-09: Edit modal shows the full contact list, list↔edit count matches, and "Preview all" un-truncates the chat sample (2026-09-12 fixes)', async ({ page }) => {
+    test.skip(!IS_LOCAL, SKIP_REASON);
+    test.setTimeout(240_000);
+    const segmentName = `QA_PW_SEG_FULLIST_${Date.now()}`;
+
+    // Same broad criteria as MKT-SEG-07/08 — known to resolve well over the
+    // chat sample's 5-row cap in clinic 611 (~83 in earlier manual testing),
+    // which is exactly what's needed to exercise "Preview all" meaningfully.
+    await gotoMarketing(page, 'segments');
+    await openCreateSegment(page);
+    const resolveResp = await sendSegmentMessage(page, 'Patients whose last visit was after January 1, 2020');
+    const resolveBody = await resolveResp.json();
+    test.skip(!resolveBody.resolve, 'Resolve turn did not fire (fabrication risk) — rerun.');
+    const resolve = resolveBody.resolve;
+    test.skip(
+      !(resolve.set_ref && resolve.total > (resolve.rows || []).length),
+      `Resolved total (${resolve.total}) doesn't exceed the sample size — "Preview all" wouldn't appear, nothing to exercise.`
+    );
+
+    // Bug #2 (2026-09-12): find_matching_patients caps `rows` at 5 regardless
+    // of `total` — "Preview all" was dead markup with no id/handler at all
+    // before this fix, so the button not existing/appearing is exactly the
+    // regression this guards against.
+    const previewBtn = page.locator('#sgm-btn-preview');
+    await expect(previewBtn).toBeVisible();
+    const sampleRowCount = await page.locator('#sgm-contact-list .sgm-contact-row').count();
+    expect(sampleRowCount).toBe((resolve.rows || []).length);
+    expect(sampleRowCount).toBeLessThan(resolve.total);
+
+    const [previewResp] = await Promise.all([
+      page.waitForResponse((r) => /\/segments\/preview\/[^/?]+$/.test(r.url()) && r.request().method() === 'GET'),
+      previewBtn.click(),
+    ]);
+    expect(previewResp.ok()).toBeTruthy();
+    const previewBody = await previewResp.json();
+    expect(previewBody.total).toBe(resolve.total);
+    await expect(page.locator('#sgm-contact-list .sgm-contact-row')).toHaveCount(resolve.total);
+    await expect(previewBtn).toBeHidden();
+
+    // Save it, then compare list↔edit-modal counts.
+    await page.locator('#sgm-name').fill(segmentName);
+    const [createResp] = await Promise.all([
+      page.waitForResponse((r) => r.url().includes('/segments/chat') && r.request().method() === 'POST', { timeout: 60_000 }),
+      page.locator('#sgm-btn-create').click(),
+    ]);
+    let saveBody = await createResp.json();
+    if (!saveBody.save) {
+      const confirmResp = await sendSegmentMessage(page, 'Yes, I confirm, please save it now.');
+      saveBody = await confirmResp.json();
+    }
+    test.skip(!saveBody.save, 'Save never completed (fabrication risk) — rerun.');
+
+    await page.reload();
+    await gotoMarketing(page, 'segments');
+    await expect(page.locator('#tbl-segments-body', { hasText: segmentName })).toBeVisible({ timeout: 20_000 });
+
+    // Bug #3 (2026-09-12): the list's count came from `segments.resolved_count`
+    // — a snapshot written once at save time and never refreshed afterward
+    // (confirmed: nothing in either repo's cron/scheduler touches that
+    // column) — so it could silently drift from live membership. Reading it
+    // straight from MKT_SEGMENTS (not scraping DOM text) since the row markup
+    // has no stable selector for the count cell (marketing.js's
+    // renderSegmentsTab just emits a bare `.font-bold` td).
+    const listedSegment = await page.evaluate((name) => {
+      const list = (window as any).MKT_SEGMENTS || [];
+      return list.find((s: any) => s.name === name);
+    }, segmentName);
+    expect(listedSegment).toBeTruthy();
+
+    // Bug #1 (2026-09-12): openEditSegment() only ever fetched segmentDetail
+    // (criteria/keep_updating) — the contact list stayed empty under a
+    // correct-looking count. Now it also fetches segmentContacts(), which for
+    // a keep_updating=ON segment re-resolves live (same call the list's own
+    // count now uses, per the Bug #3 fix), so these two numbers must agree.
+    const { contactsResp } = await openEditSegment(page, segmentName);
+    const contactsBody = await contactsResp.json();
+    expect(listedSegment.contact_count).toBe(contactsBody.total);
+    await expect(page.locator('#sgm-contact-list .sgm-contact-row')).toHaveCount(contactsBody.total);
+    await expect(page.locator('#sgm-contacts-count')).toContainText(String(contactsBody.total));
+    // Edit's own fetch is already the unpaginated full list — nothing left
+    // for "Preview all" to add here, so it must stay hidden in this mode.
+    await expect(previewBtn).toBeHidden();
   });
 });
