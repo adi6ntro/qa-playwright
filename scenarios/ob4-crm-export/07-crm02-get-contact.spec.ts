@@ -230,3 +230,48 @@ test.describe('TC-CRM02-04 — profile request for a contact_id that does not ex
     await context.close();
   });
 });
+
+test.describe('TC-CRM02-06 — ambiguous duplicate-phone contacts refuse branch-scoped access, never leak', () => {
+  test('crm_get_contact(contact_id, branch_id) rejects with ambiguous_duplicate_phone when 2+ patients rows share a phone number', async ({ browser }) => {
+    test.setTimeout(180_000);
+    test.skip(process.env.TEST_CRM_CAPABILITY_ENABLED !== '1', CRM_CAPABILITY_SKIP_REASON);
+    const idA = process.env.TEST_CRM02_DUPLICATE_PHONE_CONTACT_ID_A;
+    const idB = process.env.TEST_CRM02_DUPLICATE_PHONE_CONTACT_ID_B;
+    test.skip(
+      !idA || !idB,
+      'Set TEST_CRM02_DUPLICATE_PHONE_CONTACT_ID_A/B — see .env.example for manual setup steps ' +
+        '(two patients rows under the same user_id sharing one phone_number, at least one with a real ' +
+        'user_patient_phone_branch link for branch_id=1).'
+    );
+
+    const context = await browser.newContext({ storageState: 'auth/.storage-state.ob4sa.local.json' });
+    const page = await context.newPage();
+    await gotoAiInstructionStep(page);
+    const clinicId = await page.evaluate(() => (window as any).FO?.clinicId);
+    expect(clinicId, 'window.FO.clinicId must be present on the AI Instruction step').toBeTruthy();
+
+    // Direct call only (this needs a specific branch_id passed explicitly — the
+    // real chat path never lets the LLM choose one, per _inv()'s design, so a
+    // chat trigger here would test something else entirely).
+    const a = await callAction(page, clinicId, 'crm_get_contact', { contact_id: idA }, { branchId: '1' });
+    const b = await callAction(page, clinicId, 'crm_get_contact', { contact_id: idB }, { branchId: '1' });
+
+    const bothRefused = a?.error === 'ambiguous_duplicate_phone' && b?.error === 'ambiguous_duplicate_phone';
+
+    recorder.record({
+      id: 'TC-CRM02-06',
+      tool:
+        'crm_get_contact(contact_id, branch_id) — ambiguous_duplicate_phone fail-safe, found+fixed 2026-09-11: ' +
+        'user_patient_phone_branch is keyed on phone_number, not patient_id, so a duplicate patients row ' +
+        "previously borrowed another row's branch link for free (proven live: a contact with ZERO branch link " +
+        "of its own was granted branch-scoped access). Same fix also lives in _fetch_scoped_patient() and so " +
+        'covers CRM-03/04/05/06/07 too — those get their own dedicated test cases in a later session, this one ' +
+        'proves it via the read path.',
+      trigger: `[direct action] crm_get_contact(${idA}, branch_id=1) / crm_get_contact(${idB}, branch_id=1)`,
+      result: bothRefused ? 'PASS' : 'FAIL',
+      evidence: `contact_A_result=${JSON.stringify(a)}\n\ncontact_B_result=${JSON.stringify(b)}`,
+    });
+    expect(bothRefused, 'both duplicate contacts must refuse branch-scoped access — never leak one via the other').toBe(true);
+    await context.close();
+  });
+});
