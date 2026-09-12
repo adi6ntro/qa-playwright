@@ -307,4 +307,75 @@ test.describe('Marketing — Segments: keep_updating, Send Campaign, Edit (LOCAL
     // for "Preview all" to add here, so it must stay hidden in this mode.
     await expect(previewBtn).toBeHidden();
   });
+
+  // MKT-SEG-10/11 below deliberately never touch the bulk-campaign wizard —
+  // see 03-marketing-campaigns-stub.spec.ts's safety note: every wizard
+  // button past Step 1 shares `.bkm-btn-next`, and bkmGetContacts() falls
+  // back to a hardcoded list with real phone numbers, so anything beyond
+  // Step 1 there is manual-only. These stay entirely inside the Segments
+  // modal instead.
+
+  test('MKT-SEG-10: "Preview all" with an expired/invalid set_ref shows an error and recovers, without corrupting the visible sample', async ({ page }) => {
+    test.skip(!IS_LOCAL, SKIP_REASON);
+    test.setTimeout(120_000);
+
+    await gotoMarketing(page, 'segments');
+    await openCreateSegment(page);
+    const resolveResp = await sendSegmentMessage(page, 'Patients whose last visit was after January 1, 2020');
+    const resolveBody = await resolveResp.json();
+    test.skip(!resolveBody.resolve, 'Resolve turn did not fire (fabrication risk) — rerun.');
+    const resolve = resolveBody.resolve;
+    test.skip(
+      !(resolve.set_ref && resolve.total > (resolve.rows || []).length),
+      `Resolved total (${resolve.total}) doesn't exceed the sample size — "Preview all" wouldn't appear, nothing to exercise.`
+    );
+
+    const previewBtn = page.locator('#sgm-btn-preview');
+    await expect(previewBtn).toBeVisible();
+    const sampleCountBefore = await page.locator('#sgm-contact-list .sgm-contact-row').count();
+
+    // Simulates the real 30-minute agent_set_refs TTL expiry (resolve_set_ref
+    // returns None for an unknown/expired id) without an actual 30-min wait —
+    // corrupt only the client-held set_ref, nothing else about the page state.
+    await page.evaluate(() => { (window as any)._sgmLastResolve.set_ref = 'expired-or-bogus-set-ref'; });
+
+    const [previewResp] = await Promise.all([
+      page.waitForResponse((r) => /\/segments\/preview\/[^/?]+$/.test(r.url()) && r.request().method() === 'GET'),
+      previewBtn.click(),
+    ]);
+    expect(previewResp.ok()).toBeFalsy();
+
+    await expect(page.locator('#bkm-snackbar')).toContainText('Could not load the full list');
+    await expect(previewBtn).toBeEnabled();
+    await expect(previewBtn).toHaveText('Preview all');
+    // A failed preview must never blank out or partially overwrite the
+    // 5-row sample that was already working.
+    await expect(page.locator('#sgm-contact-list .sgm-contact-row')).toHaveCount(sampleCountBefore);
+  });
+
+  test('MKT-SEG-11: a criteria description matching 0 patients shows an honest empty result, not a crash', async ({ page }) => {
+    test.skip(!IS_LOCAL, SKIP_REASON);
+    test.setTimeout(120_000);
+
+    await gotoMarketing(page, 'segments');
+    await openCreateSegment(page);
+    const resolveResp = await sendSegmentMessage(page, 'Patients whose last visit was after January 1, 2099');
+    const resolveBody = await resolveResp.json();
+    test.skip(!resolveBody.resolve, 'Resolve turn did not fire (fabrication risk) — rerun.');
+    test.skip(
+      resolveBody.resolve.total !== 0,
+      `Criteria matched ${resolveBody.resolve.total} patients instead of 0 — pick a further-future date and rerun.`
+    );
+
+    await expect(page.locator('#sgm-contacts-count')).toContainText('0 contacts suggested');
+    await expect(page.locator('#sgm-contact-list .sgm-contact-row')).toHaveCount(0);
+    // Nothing to preview when the sample already IS the full (empty) result.
+    await expect(page.locator('#sgm-btn-preview')).toBeHidden();
+    // The rest of the modal must stay usable, not stuck/broken by a
+    // zero-row result — observed actual behavior: save is NOT blocked on a
+    // 0-contact resolve (no code path disables it for total===0), which this
+    // asserts as current behavior rather than a should/shouldn't.
+    await expect(page.locator('#sgm-name-row')).toBeVisible();
+    await expect(page.locator('#sgm-btn-create')).toBeEnabled();
+  });
 });
