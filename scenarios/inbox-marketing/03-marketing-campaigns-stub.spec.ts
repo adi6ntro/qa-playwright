@@ -108,6 +108,12 @@ test.describe('Marketing — Campaigns tab (Step 1 only — see safety note abov
  * `#bkm-step-N` is visible; it fires no request and sends nothing on its own.
  */
 test.describe('Marketing — Campaigns tab: Segment audience picker (LOCAL-ONLY, 2026-09-13)', () => {
+  // Needs clinic 611's real segments (from 05-marketing-segments-local.spec.ts's
+  // own fixtures) — the config default (auth/.storage-state.json) is a
+  // different account entirely, so this must override it same as
+  // 05-marketing-segments-local.spec.ts does.
+  test.use({ storageState: 'auth/.storage-state.ob4sa.local.json' });
+
   const BASE_URL = process.env.BASE_URL || '';
   const IS_LOCAL = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?\/?$/i.test(BASE_URL);
 
