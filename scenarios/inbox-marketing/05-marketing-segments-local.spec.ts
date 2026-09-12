@@ -306,6 +306,9 @@ test.describe('Marketing — Segments: keep_updating, Send Campaign, Edit (LOCAL
     // Edit's own fetch is already the unpaginated full list — nothing left
     // for "Preview all" to add here, so it must stay hidden in this mode.
     await expect(previewBtn).toBeHidden();
+    // Negative case for MKT-SEG-12's warning check: a structured-only
+    // segment (no conversation_content_matched criterion) must NOT show it.
+    await expect(page.locator('#sgm-warning')).toBeHidden();
   });
 
   // MKT-SEG-10/11 below deliberately never touch the bulk-campaign wizard —
@@ -377,5 +380,28 @@ test.describe('Marketing — Segments: keep_updating, Send Campaign, Edit (LOCAL
     // asserts as current behavior rather than a should/shouldn't.
     await expect(page.locator('#sgm-name-row')).toBeVisible();
     await expect(page.locator('#sgm-btn-create')).toBeEnabled();
+  });
+
+  test('MKT-SEG-12: Edit modal shows the conversation-match accuracy warning for a saved conversation-criteria segment (2026-09-12)', async ({ page }) => {
+    test.skip(!IS_LOCAL, SKIP_REASON);
+    test.setTimeout(60_000);
+
+    // Reuses whatever QA_PW_SEG_CONV_* segment already exists from earlier
+    // MKT-SEG-06 runs, rather than creating a new one via chat — this is
+    // purely about openEditSegment()'s own rendering, no LLM call needed.
+    // Every one of these is always frozen (conversation criteria forces
+    // keep_updating=False, see MKT-SEG-06), so this also exercises the
+    // warning specifically in the keep_updating=OFF/Edit path.
+    await gotoMarketing(page, 'segments');
+    await waitForSegmentsListLoaded(page);
+    const conversationSegment = await page.evaluate(() => {
+      const list = (window as any).MKT_SEGMENTS || [];
+      return list.find((s: any) => /QA_PW_SEG_CONV_/.test(s.name));
+    });
+    test.skip(!conversationSegment, 'No existing conversation-criteria segment in this environment to edit — run MKT-SEG-06 first.');
+
+    await openEditSegment(page, conversationSegment.name);
+    await expect(page.locator('#sgm-warning')).toBeVisible();
+    await expect(page.locator('#sgm-warning')).toContainText('matched on conversation content');
   });
 });
