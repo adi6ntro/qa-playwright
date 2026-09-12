@@ -301,11 +301,29 @@ test.describe('Marketing — Segments: keep_updating, Send Campaign, Edit (LOCAL
     const { contactsResp } = await openEditSegment(page, segmentName);
     const contactsBody = await contactsResp.json();
     expect(listedSegment.contact_count).toBe(contactsBody.total);
-    await expect(page.locator('#sgm-contact-list .sgm-contact-row')).toHaveCount(contactsBody.total);
+    expect(contactsBody.total).toBeGreaterThan(5); // needed for the sample/expand check below to mean anything
     await expect(page.locator('#sgm-contacts-count')).toContainText(String(contactsBody.total));
-    // Edit's own fetch is already the unpaginated full list — nothing left
-    // for "Preview all" to add here, so it must stay hidden in this mode.
+
+    // Follow-up (2026-09-12, same day): showing all of segmentContacts()'s
+    // (already-unpaginated) rows immediately on open was overwhelming for a
+    // large segment — now Edit shows a 5-row sample too, with "Preview all"
+    // expanding it. Unlike the chat-resolve flow, the expand is local (the
+    // full list is already in memory from the fetch above) — clicking it
+    // must NOT fire a second network request.
+    await expect(page.locator('#sgm-contact-list .sgm-contact-row')).toHaveCount(5);
+    await expect(previewBtn).toBeVisible();
+
+    let secondRequestFired = false;
+    const onRequest = (r: import('@playwright/test').Request) => {
+      if (/\/segments\/(preview|\d+\/contacts)\//.test(r.url()) || /\/segments\/\d+\/contacts$/.test(r.url())) secondRequestFired = true;
+    };
+    page.on('request', onRequest);
+    await previewBtn.click();
+    await expect(page.locator('#sgm-contact-list .sgm-contact-row')).toHaveCount(contactsBody.total);
     await expect(previewBtn).toBeHidden();
+    page.off('request', onRequest);
+    expect(secondRequestFired).toBe(false);
+
     // Negative case for MKT-SEG-12's warning check: a structured-only
     // segment (no conversation_content_matched criterion) must NOT show it.
     await expect(page.locator('#sgm-warning')).toBeHidden();
