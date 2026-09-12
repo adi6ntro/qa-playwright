@@ -88,6 +88,74 @@ test.describe('Marketing — Campaigns tab (Step 1 only — see safety note abov
   });
 });
 
+/**
+ * Segment audience picker (2026-09-13) — NOT deployed to dev.reporty.sa yet,
+ * so this describe block is local-only, same posture as
+ * 05-marketing-segments-local.spec.ts's own IS_LOCAL guard.
+ *
+ * Before this date, "Segment" was only ever selectable via
+ * openBulkModalForSegment() (a segment row's own "Send Campaign" link, which
+ * pre-resolved that one segment before opening the wizard). That entry point
+ * is unused now — the Segments tab's "Send Campaign" link just switches to
+ * this tab (switchTab('campaigns')) — and picking a segment is a generic
+ * `<select>` (#bkm-segment-picker) inside Step 3, reachable from ANY entry
+ * point into this wizard.
+ *
+ * ⚠️ Reads Step 3 via direct state manipulation (`_bkmStep = 3;
+ * bkmRender();`), NEVER by clicking `.bkm-btn-next` — see this file's own
+ * header safety note above: every button past Step 1 shares that class, and
+ * walking there via clicks is manual-only. `bkmRender()` only toggles which
+ * `#bkm-step-N` is visible; it fires no request and sends nothing on its own.
+ */
+test.describe('Marketing — Campaigns tab: Segment audience picker (LOCAL-ONLY, 2026-09-13)', () => {
+  const BASE_URL = process.env.BASE_URL || '';
+  const IS_LOCAL = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?\/?$/i.test(BASE_URL);
+
+  test('MKT-CAM-06: picking a segment from the generic picker resolves its real contacts, opened via the plain "+ Bulk Campaign" button', async ({ page }) => {
+    test.skip(!IS_LOCAL, `BASE_URL is not local (got ${BASE_URL || '(unset)'}) — this feature isn't deployed to dev.reporty.sa yet.`);
+    test.setTimeout(60_000);
+
+    // Deliberately does NOT visit the Segments tab first — MKT_SEGMENTS may
+    // be empty going in, exercising bkmPopulateSegmentPicker()'s own fetch
+    // path rather than relying on it already being warm.
+    await gotoMarketing(page, 'campaigns');
+    await page.locator('a', { hasText: '+ Bulk Campaign' }).click();
+    await expect(page.locator('#modal-bulk-campaign')).toHaveClass(/open/);
+
+    await page.evaluate(() => {
+      (window as any)._bkmStep = 3;
+      (window as any).bkmRender();
+    });
+
+    const picker = page.locator('#bkm-segment-picker');
+    await expect(picker).toBeVisible({ timeout: 15_000 }); // waits out bkmPopulateSegmentPicker()'s own fetch+re-render
+
+    const optionCount = await picker.locator('option').count();
+    test.skip(optionCount <= 1, 'No saved segments in this environment to pick from.');
+
+    const firstSegmentId = await picker.locator('option').nth(1).getAttribute('value');
+    const [contactsResp] = await Promise.all([
+      page.waitForResponse((r) => new RegExp(`/segments/${firstSegmentId}/contacts$`).test(r.url())),
+      picker.selectOption(firstSegmentId as string),
+    ]);
+    const contactsBody = await contactsResp.json();
+
+    const bkmState = await page.evaluate(() => ({
+      audience: (window as any)._bkmAudience,
+      segmentId: (window as any)._bkmSegmentId,
+      contactCount: ((window as any)._bkmSegmentContacts || []).length,
+    }));
+    expect(bkmState.audience).toBe('segment');
+    expect(String(bkmState.segmentId)).toBe(firstSegmentId);
+    expect(bkmState.contactCount).toBe((contactsBody.contacts || []).length);
+
+    const segOption = page.locator('.bkm-radio-option', { has: picker });
+    await expect(segOption).toHaveClass(/selected/);
+
+    // Stop here — never click .bkm-btn-next or anything past Step 3.
+  });
+});
+
 test.describe('Marketing — Contacts tab: "+ Add Contact" / "Import CSV" (dead ends)', () => {
   test('MKT-C-04: "+ Add Contact" submit closes the modal but saves nothing', async ({ page }) => {
     await gotoMarketing(page, 'contacts');

@@ -70,17 +70,19 @@ export async function openEditSegment(page: Page, segmentName: string) {
   return { detailResp, contactsResp };
 }
 
-/** Opens an existing segment's row "Send Campaign" link — resolves that
- * segment's contacts (frozen → segment_frozen_members, dynamic → live OB3
- * resolve) and opens the bulk campaign modal with it pre-selected. */
-export async function openSendCampaignForSegment(page: Page, segmentName: string) {
+/** Clicks a segment row's "Send Campaign" link. As of 2026-09-13 this just
+ * switches to the Campaigns tab (switchTab('campaigns') in marketing.blade.php)
+ * rather than opening the bulk-campaign wizard directly with this segment
+ * pre-selected — that pre-select shortcut (bulk-campaign.js's
+ * openBulkModalForSegment) is unused now, kept only for a possible future
+ * "send straight from Segments" flow. Picking a segment as a campaign's
+ * audience is now a generic picker inside the Campaigns tab's own wizard —
+ * see `bkmSelectSegmentFromPicker` covered by MKT-CAM-06 in
+ * 03-marketing-campaigns-stub.spec.ts (or wherever that test lives). */
+export async function clickSendCampaignForSegment(page: Page, segmentName: string) {
   const row = page.locator('#tbl-segments-body tr', { hasText: segmentName });
-  const [resp] = await Promise.all([
-    page.waitForResponse((r) => /\/segments\/\d+\/contacts$/.test(r.url()) && r.request().method() === 'GET'),
-    row.locator('a', { hasText: 'Send Campaign' }).click(),
-  ]);
-  await expect(page.locator('#modal-bulk-campaign')).toHaveClass(/open/);
-  return resp;
+  await row.locator('a', { hasText: 'Send Campaign' }).click();
+  await expect(page.locator('#tab-campaigns')).toHaveClass(/active/);
 }
 
 /** Fills the segment chat input and sends it, waiting for the real

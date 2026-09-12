@@ -3,7 +3,7 @@ import {
   gotoMarketing,
   openCreateSegment,
   openEditSegment,
-  openSendCampaignForSegment,
+  clickSendCampaignForSegment,
   sendSegmentMessage,
   waitForSegmentsListLoaded,
 } from '../../helpers/marketing';
@@ -106,7 +106,7 @@ test.describe('Marketing — Segments: keep_updating, Send Campaign, Edit (LOCAL
     expect(saveBody.save.keep_updating_forced_off).toBe(true);
   });
 
-  test('MKT-SEG-07: "Send Campaign" resolves the segment\'s contacts and pre-selects it as the bulk-campaign audience', async ({ page }) => {
+  test('MKT-SEG-07: "Send Campaign" switches to the Campaigns tab (2026-09-13 — no longer opens the wizard directly)', async ({ page }) => {
     test.skip(!IS_LOCAL, SKIP_REASON);
     test.setTimeout(180_000);
     const segmentName = `QA_PW_SEG_SEND_${Date.now()}`;
@@ -132,31 +132,19 @@ test.describe('Marketing — Segments: keep_updating, Send Campaign, Edit (LOCAL
     await gotoMarketing(page, 'segments');
     await expect(page.locator('#tbl-segments-body', { hasText: segmentName })).toBeVisible({ timeout: 20_000 });
 
-    const contactsResp = await openSendCampaignForSegment(page, segmentName);
-    expect(contactsResp.ok()).toBeTruthy();
-    const contactsBody = await contactsResp.json();
-
-    // The segment audience option lives on Step 3 (Audience) of the bulk
-    // wizard, not Step 1 (Template) where openBulkModalForSegment() opens —
-    // that's the real, correct flow (a segment still needs a template chosen
-    // before its audience is confirmed), so it's genuinely not `visible` yet
-    // here. Check the underlying state directly instead of requiring a full
-    // template-creation walk through Steps 1-2 just to prove pre-selection —
-    // toHaveClass/toContainText read the element's actual attributes/content
-    // without needing it on-screen; only toBeVisible() needs that (and was
-    // the wrong check here, live-caught 2026-09-10).
-    const segOption = page.locator('.bkm-radio-option', { has: page.locator('#bkm-segment-name') });
-    await expect(segOption).toHaveClass(/selected/);
-    await expect(page.locator('#bkm-segment-name')).toContainText(segmentName);
-
-    const bkmState = await page.evaluate(() => ({
-      audience: (window as any)._bkmAudience,
-      segmentName: (window as any)._bkmSegmentName,
-      contactCount: ((window as any)._bkmSegmentContacts || []).length,
-    }));
-    expect(bkmState.audience).toBe('segment');
-    expect(bkmState.segmentName).toBe(segmentName);
-    expect(bkmState.contactCount).toBe((contactsBody.contacts || []).length);
+    // clickSendCampaignForSegment() itself asserts #tab-campaigns becomes
+    // active — the real behavior change under test here is the negative
+    // case: the wizard must NOT open and no segment-resolve request fires,
+    // unlike the old openBulkModalForSegment()-driven flow this replaced.
+    let contactsRequestFired = false;
+    const onRequest = (r: import('@playwright/test').Request) => {
+      if (/\/segments\/\d+\/contacts$/.test(r.url())) contactsRequestFired = true;
+    };
+    page.on('request', onRequest);
+    await clickSendCampaignForSegment(page, segmentName);
+    await expect(page.locator('#modal-bulk-campaign')).not.toHaveClass(/open/);
+    page.off('request', onRequest);
+    expect(contactsRequestFired).toBe(false);
   });
 
   test('MKT-SEG-08: "Edit" updates the segment in place — same row, not a duplicate', async ({ page }) => {
