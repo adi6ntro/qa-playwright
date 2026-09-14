@@ -376,3 +376,62 @@ test.describe('TC-DSP01-04 — chart requested with no underlying data', () => {
     await context.close();
   });
 });
+
+/**
+ * TC-DSP01-05 — added 2026-09-14. `render_chart` was extended from
+ * `contact_list`-only to 5 chartable kinds (contact_list, appointment_list,
+ * staff_list, campaign_list, analytics — confirmed via charts.py's
+ * `_GROUP_BY_BY_KIND`/`_DEFAULT_GROUP_BY` dicts, 2026-09-14); the other 4 kinds
+ * (instruction_list, contact_card, doctor_card, retargeting_settings) are
+ * permanently rejected with `unsupported_data_type_for_chart` (charts.py's
+ * fall-through `else` branch) since they have no groupable dimension. Everything
+ * above this comment only ever charts `contact_list`.
+ *
+ * Same minting constraint as this session's EXP-01-KINDS additions
+ * (16-exp01-export-search-result.spec.ts): a non-contact_list set_ref is only
+ * ever produced by `_inv()`'s side-effect minting inside the real chat
+ * orchestrator (maha_inapp_agent.py:3464-3500) — the direct-call
+ * `crm_search_contacts → render_chart` "backend proof" pattern the rest of this
+ * file uses cannot apply here, since `read_appointments` called via the direct
+ * `POST /clinic/<id>/action` endpoint (`registry.invoke()`, bypasses `_inv()`)
+ * mints nothing. This test is chat-only, same two-turn shape (list, then "chart
+ * this") as TC-DSP01-01/02's own chat sub-tests, with the same DOM +
+ * `GET /fo/chart/{id}` verification.
+ */
+test.describe('TC-DSP01-05 — appointment_list chart, group_by=status (new kind, 2026-09-14)', () => {
+  test('chat: list today\'s appointments, then chart them by status — a real chart widget appears', async ({
+    browser,
+  }) => {
+    test.setTimeout(180_000);
+    capabilityGate();
+
+    const context = await browser.newContext({ storageState: 'auth/.storage-state.ob4sa.local.json' });
+    const page = await context.newPage();
+    await gotoAiInstructionStep(page);
+
+    const listTrigger = 'أرني مواعيد اليوم';
+    const listReply = await sendMessage(page, listTrigger);
+    const before = await chartCardCount(page);
+    const chartTrigger = 'اعرضي هذه المواعيد كمخطط أعمدة حسب الحالة (status)';
+    const chartReply = await sendMessage(page, chartTrigger);
+    const after = await chartCardCount(page);
+    const cardAppeared = after > before;
+    const chartId = cardAppeared ? await latestChartId(page) : null;
+    const chartData = chartId ? await fetchChartData(page, chartId) : null;
+
+    recorder.record({
+      id: 'TC-DSP01-05',
+      tool: 'render_chart(kind=appointment_list, group_by=status) via real chat — verified via DOM + GET /fo/chart/{id}',
+      trigger: `${listTrigger} / ${chartTrigger}`,
+      result: cardAppeared && chartData?.success ? 'PASS' : 'FAIL',
+      evidence:
+        `listReply="${listReply.text}"\nchartReply="${chartReply.text}"\n` +
+        `card_appeared=${cardAppeared} chart_id=${chartId} ${JSON.stringify(chartData)}\n\n` +
+        `[Note] If today's real appointment data is empty, render_chart may still succeed with an empty/flat ` +
+        `chart (charts.py has no "no data" special case beyond the set_ref existing) — a card appearing at all, ` +
+        `backed by a real chart_type from the Laravel endpoint, is still valid evidence the new kind wires up.`,
+    });
+    expect(cardAppeared, 'a chart widget must appear for an appointment_list chart request too').toBe(true);
+    await context.close();
+  });
+});

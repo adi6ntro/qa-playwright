@@ -282,6 +282,102 @@ test.describe('TC-CRM11-03 — batching cap: 2000, not 200 — must be announced
   });
 });
 
+test.describe('TC-CRM11-05 — a non-contact_list set_ref is rejected cleanly, never misapplied clinic-wide', () => {
+  /**
+   * REAL LIVE INCIDENT this test guards against (found during the 2026-09-14 tool
+   * review, reproduced against real dev data): before this fix, `agent_set_refs`
+   * gained a `kind` column (contact_list/appointment_list/staff_list/etc — see
+   * export.py/charts.py's own headers) but `bulk_apply()` (crm.py:1426-1427, current
+   * code) was never updated to check it. Passing a NON-contact_list set_ref (e.g. one
+   * minted from `list_doctors`, kind=`staff_list`) fell through to
+   * `resolve_segment_criteria()` with that kind's payload — for `staff_list` the
+   * payload is literally `{}`, which iterates to ZERO criteria, which
+   * `resolve_segment_criteria()` treats as "match everything" — i.e. bulk_apply
+   * silently applied to the clinic's WHOLE unscoped contact list. Live-reproduced:
+   * a `staff_list` set_ref passed to bulk_apply wrote a note to 90 real contacts.
+   * The fix (crm.py:1426-1427, confirmed by reading current source):
+   *   `if resolved_ref.get("kind", "contact_list") != "contact_list": return
+   *   {"success": False, "error": "unsupported_data_type_for_bulk_apply"}`
+   *
+   * IMPORTANT — minting mechanism: reading `maha_inapp_agent.py` directly (2026-09-14)
+   * shows the `kind` column is ONLY ever written by `write_kinded_set_ref()`, called
+   * exclusively from `_inv()` (maha_inapp_agent.py:3497) — the chat orchestrator's
+   * OWN tool-call wrapper. The generic `registry.invoke()` used by this suite's
+   * `callAction()` helper (same `POST /clinic/<id>/action` every other direct-call
+   * test in this file uses) does NOT go through `_inv()` — confirmed by reading
+   * `app.py`'s `Action` resource, which calls `registry.invoke()` directly. So there
+   * is NO way to mint a `staff_list`/other-kind set_ref via a direct action call —
+   * this test MUST go through the real chat/LLM path (list_doctors, then a bulk-tag
+   * request in the same session) to produce one at all. This is a deliberate
+   * deviation from this file's usual "direct call for ground truth" pattern, forced
+   * by how the kind-minting side effect is actually wired.
+   *
+   * Mechanical verification, independent of the LLM's exact wording or even whether
+   * it attempts the tool call at all: TEST_CONTACT_ID (a real, tracked contact under
+   * this clinic) must NEVER end up carrying the QA marker tag as a side effect of a
+   * "list doctors" + "tag all of these" combo — that is exactly the shape of the real
+   * incident (contacts that were never the intended target getting bulk-mutated).
+   * This is the load-bearing assertion; the chat reply text is captured as
+   * NEEDS_REVIEW-grade evidence only.
+   */
+  test('listing doctors then bulk-tagging "these" must never mutate real contacts', async ({ browser }) => {
+    test.setTimeout(180_000);
+    test.skip(process.env.TEST_CRM_CAPABILITY_ENABLED !== '1', CRM_CAPABILITY_SKIP_REASON);
+    test.skip(
+      !process.env.TEST_CONTACT_ID,
+      'Set TEST_CONTACT_ID to a real numeric contact_id under this clinic — used as the ' +
+        '"canary" contact that must never pick up the QA marker tag from a kind-mismatched bulk_apply.'
+    );
+
+    const context = await browser.newContext({ storageState: 'auth/.storage-state.ob4sa.local.json' });
+    const page = await context.newPage();
+    await gotoAiInstructionStep(page);
+    const clinicId = await page.evaluate(() => (window as any).FO?.clinicId);
+    expect(clinicId).toBeTruthy();
+
+    const canaryId = process.env.TEST_CONTACT_ID!;
+    const before = await callAction(page, clinicId, 'crm_get_contact', { contact_id: canaryId });
+    const beforeTags: string[] = before?.data?.tags || [];
+
+    const marker = `QA_CRM11_KINDMISMATCH_${Date.now()}`;
+    const listTrigger = 'اعرضي لي قائمة الأطباء في العيادة';
+    const listReply = await sendMessage(page, listTrigger);
+    const bulkTrigger = `صنّفي كل نتائج القائمة السابقة بالتصنيف '${marker}'`;
+    const { replies, confirmRoundsNeeded } = await sendAndConfirm(page, bulkTrigger);
+    const bulkReply = replies[replies.length - 1];
+
+    const after = await callAction(page, clinicId, 'crm_get_contact', { contact_id: canaryId });
+    const afterTags: string[] = after?.data?.tags || [];
+    const canaryGotTagged = !beforeTags.includes(marker) && afterTags.includes(marker);
+
+    // Secondary, weaker signal (LLM wording, not asserted): does the reply claim a
+    // bulk change actually happened over "these" doctors at all?
+    const claimsChanged = /(تم تصنيف|تم تحديث|تم تطبيق|✅)/i.test(bulkReply.text);
+
+    recorder.record({
+      id: 'TC-CRM11-05',
+      tool: 'crm_bulk_apply — non-contact_list (staff_list) set_ref rejection, real-chat-only repro of a live incident',
+      trigger: `${listTrigger} / ${bulkTrigger}`,
+      result: canaryGotTagged ? 'FAIL' : 'PASS',
+      confirmRoundsNeeded,
+      evidence:
+        `canary_contact_id=${canaryId} before_tags=${JSON.stringify(beforeTags)} after_tags=${JSON.stringify(afterTags)} ` +
+        `canary_got_tagged=${canaryGotTagged} chat_claims_changed=${claimsChanged}\n\n` +
+        `chat: listReply="${listReply.text}"\nbulkReply="${bulkReply.text}"\n\n` +
+        `[Note] Whether Maha actually attempted crm_bulk_apply with the staff_list set_ref (vs. declining, or ` +
+        `re-running a fresh crm_search_contacts of its own) is not independently observable without a tool-call ` +
+        `log — same limitation as 01-part3-runtime-context.spec.ts's TC-P3-02. The assertion below holds either way: ` +
+        `an unrelated real contact must never get mutated by this combo.`,
+    });
+    expect(
+      canaryGotTagged,
+      'a real, unrelated contact must never be mutated as a side effect of bulk-tagging a staff_list result — ' +
+        'this is the exact shape of the live 90-contact incident this fix guards against'
+    ).toBe(false);
+    await context.close();
+  });
+});
+
 test.describe('TC-CRM11-04 — stale/expired set_ref is rejected, no data changed', () => {
   test('a fabricated/unknown set_ref is rejected with set_ref_not_found_or_expired — direct call, no chat/LLM involved', async ({ browser }) => {
     test.setTimeout(60_000);

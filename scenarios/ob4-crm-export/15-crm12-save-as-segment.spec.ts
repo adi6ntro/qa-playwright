@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { execFileSync } from 'child_process';
 import { gotoAiInstructionStep, sendMessage } from '../../helpers/maha-chat';
 import { ReportRecorder } from '../../helpers/report';
 import '../../helpers/ob4-local-guard'; // throws if BASE_URL isn't local — see that file for why
@@ -169,6 +170,114 @@ test.describe('TC-CRM12-STUB-02 — stale/foreign set_ref is rejected, no segmen
     });
     expect(result?.success).toBe(false);
     expect(result?.error, 'must reject with set_ref_not_found_or_expired').toBe('set_ref_not_found_or_expired');
+    await context.close();
+  });
+});
+
+test.describe('TC-CRM12-05 — a non-contact_list set_ref is rejected cleanly, never saved as a segment', () => {
+  /**
+   * REAL LIVE BUG this test guards against (found+fixed 2026-09-14, confirmed by
+   * reading crm.py's current save_as_segment() directly, ~line 221-260): before the
+   * fix, a non-contact_list set_ref (e.g. `staff_list`, minted from `list_doctors`)
+   * fell straight through to `resolve_segment_criteria()` with that kind's own
+   * payload shape. For most kinds this crashed outright (a raw AttributeError — the
+   * payload isn't a list of `{"type": ...}` criterion dicts); for `staff_list`
+   * specifically the payload is `{}`, which iterates to ZERO criteria — which
+   * `resolve_segment_criteria()` treats as "match everything", i.e. it would have
+   * silently saved a segment scoped to the clinic's ENTIRE unscoped contact list
+   * instead of erroring. The fix (crm.py, current source):
+   *   `if resolved_ref.get("kind", "contact_list") != "contact_list": return
+   *   {"success": False, "error": "unsupported_data_type_for_segment"}`
+   *
+   * Same minting constraint as 14-crm11-bulk-apply.spec.ts's TC-CRM11-05: a
+   * non-contact_list set_ref can ONLY be produced via the real chat/LLM path
+   * (`_inv()`'s side-effect minting, maha_inapp_agent.py:3464-3500) — the direct
+   * `POST /clinic/<id>/action` callAction() helper this file otherwise uses for
+   * ground truth bypasses `_inv()` entirely (calls `registry.invoke()` directly, per
+   * app.py's Action resource) — so this test necessarily drives the mint through
+   * real chat (list_doctors) too.
+   *
+   * Mechanical verification: unlike bulk_apply (which has an observable per-contact
+   * side effect this suite can probe via crm_get_contact), save_as_segment's only
+   * externally-observable effect is a new row in the `segments` table — and no tool
+   * in this agent's registry reads segments back (`registrations.py` has no
+   * `list_segments`/`get_segment`-equivalent registered action; `get_segment()` in
+   * segments.py is an internal function only, confirmed 2026-09-14). Since this
+   * suite is hard-scoped to `localhost` already (`ob4-local-guard.ts`) and the local
+   * `reporty-onboard-phase3` `config.json` points its OWN db connection at the exact
+   * same local MySQL instance this check queries (`dbHost/dbUser/dbPassword/
+   * dbDatabase` — confirmed identical to the values below by reading config.json
+   * directly), a direct, read-only `mysql` CLI query against the `segments` table is
+   * the only way to mechanically prove no segment got created — not a deviation from
+   * "browser-only" testing so much as the sole ground truth available for this one
+   * assertion. Kept strictly read-only (SELECT only, no local mysql credentials are
+   * secret — empty password, confirmed in config.json).
+   */
+  function queryLocalSegmentsCount(clinicId: string, nameMarker: string): number {
+    try {
+      const out = execFileSync(
+        'mysql',
+        [
+          '-h', '127.0.0.1',
+          '-u', 'root',
+          '--password=',
+          '-N', // no column headers
+          '-e', `SELECT COUNT(*) FROM \`reporty-dev\`.segments WHERE user_id = ${Number(clinicId)} AND name = '${nameMarker.replace(/'/g, "\\'")}';`,
+        ],
+        { encoding: 'utf-8', timeout: 10_000 }
+      );
+      return parseInt(out.trim(), 10) || 0;
+    } catch (err) {
+      // No local mysql CLI / no local DB reachable — this assertion can't run in that
+      // environment. Surfaced as -1 so the caller can skip cleanly instead of
+      // misreporting a false PASS ("0 found" would otherwise look identical to "the
+      // query itself failed").
+      return -1;
+    }
+  }
+
+  test('listing doctors then "save as segment" must never create a segment scoped to the whole clinic', async ({
+    browser,
+  }) => {
+    test.setTimeout(180_000);
+    test.skip(process.env.TEST_CRM_CAPABILITY_ENABLED !== '1', CRM_CAPABILITY_SKIP_REASON);
+
+    const context = await browser.newContext({ storageState: 'auth/.storage-state.ob4sa.local.json' });
+    const page = await context.newPage();
+    await gotoAiInstructionStep(page);
+    const clinicId = await page.evaluate(() => (window as any).FO?.clinicId);
+    expect(clinicId).toBeTruthy();
+
+    const marker = `QA_CRM12_KINDMISMATCH_${Date.now()}`;
+    const listTrigger = 'اعرضي لي قائمة الأطباء في العيادة';
+    const listReply = await sendMessage(page, listTrigger);
+    const saveTrigger = `احفظي نتيجة القائمة السابقة كشريحة (segment) باسم '${marker}'`;
+    const saveReply = await sendMessage(page, saveTrigger);
+
+    const claimsSaved = /(تم حفظ|تم إنشاء|✅.*(شريحة|segment))/i.test(saveReply.text);
+
+    const createdCount = queryLocalSegmentsCount(clinicId, marker);
+    test.skip(
+      createdCount === -1,
+      'Could not query the local `segments` table directly (no local `mysql` CLI, or the local DB isn\'t reachable ' +
+        'at 127.0.0.1/reporty-dev) — this specific assertion has no other ground truth available (no ' +
+        'list_segments/get_segment tool exists in the agent registry). See this test\'s header comment.'
+    );
+
+    recorder.record({
+      id: 'TC-CRM12-05',
+      tool: 'crm_save_as_segment — non-contact_list (staff_list) set_ref rejection, real-chat-only repro',
+      trigger: `${listTrigger} / ${saveTrigger}`,
+      result: createdCount > 0 ? 'FAIL' : 'PASS',
+      evidence:
+        `marker="${marker}" segments_row_count_for_marker=${createdCount} chat_claims_saved=${claimsSaved}\n\n` +
+        `chat: listReply="${listReply.text}"\nsaveReply="${saveReply.text}"\n\n` +
+        `[Note] Same tool-call-visibility limitation as TC-CRM11-05: whether Maha actually attempted ` +
+        `crm_save_as_segment with the staff_list set_ref (vs. declining or re-querying contacts fresh) isn't ` +
+        `independently observable without a tool-call log. The assertion holds either way: no segment named ` +
+        `exactly this marker may exist for this clinic afterward.`,
+    });
+    expect(createdCount, 'no segment must ever be created from a non-contact_list (staff_list) set_ref').toBe(0);
     await context.close();
   });
 });

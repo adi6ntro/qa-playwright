@@ -42,6 +42,8 @@
     "test:ob4-rmd04": "BASE_URL=http://localhost:8000 playwright test scenarios/ob4-crm-export/27-rmd04-mark-done.spec.ts",
     "test:ob4-dsp01": "BASE_URL=http://localhost:8000 playwright test scenarios/ob4-crm-export/28-dsp01-render-chart.spec.ts",
     "test:ob4-security-branch-bypass": "BASE_URL=http://localhost:8000 playwright test scenarios/ob4-crm-export/29-security-branch-scope-bypass.spec.ts",
+    "test:ob4-tpl01": "BASE_URL=http://localhost:8000 playwright test scenarios/ob4-crm-export/30-tpl01-create-template.spec.ts",
+    "test:ob4-tpl02": "BASE_URL=http://localhost:8000 playwright test scenarios/ob4-crm-export/31-tpl02-stage-send.spec.ts",
     "test:ob4-all": "BASE_URL=http://localhost:8000 playwright test scenarios/ob4-crm-export/",
     "cleanup:ob4": "BASE_URL=http://localhost:8000 playwright test scenarios/ob4-crm-export/00-cleanup-leftover-markers.spec.ts",
 

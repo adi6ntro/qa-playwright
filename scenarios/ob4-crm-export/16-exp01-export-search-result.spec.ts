@@ -329,3 +329,125 @@ test.describe('TC-EXP01-04 — export >10,000 rows is a hard error with real fal
     await context.close();
   });
 });
+
+/**
+ * EXP-01-KINDS — added 2026-09-14. `export_result` was extended from
+ * `contact_list`-only to 9 kinds via a new `kind` column on `agent_set_refs`
+ * (contact_list, appointment_list, analytics, instruction_list, staff_list,
+ * campaign_list, contact_card, doctor_card, retargeting_settings). Everything
+ * above this comment only ever exercises `contact_list` (crm_search_contacts'
+ * own set_ref). These two blocks cover 2 of the new kinds.
+ *
+ * IMPORTANT — minting mechanism (confirmed by reading maha_inapp_agent.py and
+ * app.py directly, 2026-09-14): every non-contact_list kind is minted as a
+ * SIDE EFFECT inside `_inv()` (maha_inapp_agent.py:3464-3500) — the chat
+ * orchestrator's own tool-call wrapper — immediately after a successful
+ * read_appointments/list_doctors/read_doctors/read_campaigns/crm_get_contact/
+ * read_doctor/read_retargeting_settings/list_instructions call. The `callAction()`
+ * helper this file otherwise uses for ground truth (`POST /clinic/<id>/action`)
+ * calls `registry.invoke()` directly (see app.py's `Action` resource) and does
+ * NOT go through `_inv()` — so there is no way to mint one of these set_refs via
+ * a direct action call, and no way to fetch export_result's `download_url` via a
+ * direct call either (the tool needs a real set_ref to resolve). Both blocks
+ * below therefore run entirely through the real chat/LLM path, in two turns of
+ * the SAME session (list, then "export this") — the set_ref never has to be
+ * known outside the model's own context.
+ *
+ * Verification: `download_url` is never a JSON field visible to this suite for a
+ * chat-driven call (the frontend renders it as a plain clickable link inside the
+ * reply text via `_foAiLinkify()`, added 2026-09-14 specifically for this —
+ * ai-instruction.js's own comment: "a real download link (export_result's
+ * download_url, chiefly)"). So the URL is extracted from the reply text with the
+ * SAME regex the frontend uses to linkify it (`https?://` up to whitespace), then
+ * independently re-fetched via `page.request.get()` (session-authenticated) to
+ * confirm it's a real, live, 2xx-serving file — not just text that looks like a
+ * URL.
+ */
+test.describe('EXP-01-KINDS — export an appointment_list result (new kind, 2026-09-14)', () => {
+  test('list appointments, then export "this list" — a real download URL appears and resolves', async ({
+    browser,
+  }) => {
+    test.setTimeout(180_000);
+    test.skip(process.env.TEST_EXPORT_CAPABILITY_ENABLED !== '1', EXPORT_CAPABILITY_SKIP_REASON);
+
+    const context = await browser.newContext({ storageState: 'auth/.storage-state.ob4sa.local.json' });
+    const page = await context.newPage();
+    await gotoAiInstructionStep(page);
+
+    const listTrigger = 'أرني مواعيد اليوم';
+    const listReply = await sendMessage(page, listTrigger);
+    const exportTrigger = 'صدّري هذه القائمة كملف PDF';
+    const { replies, confirmRoundsNeeded } = await sendAndConfirm(page, exportTrigger);
+    const exportReply = replies[replies.length - 1];
+
+    const urlMatch = exportReply.text.match(/https?:\/\/[^\s)]+/);
+    const downloadUrl = urlMatch ? urlMatch[0].replace(/[).,!?;:]+$/, '') : null;
+
+    let fetchStatus: number | null = null;
+    if (downloadUrl) {
+      const resp = await page.request.get(downloadUrl).catch(() => null);
+      fetchStatus = resp ? resp.status() : null;
+    }
+
+    recorder.record({
+      id: 'EXP-01-KINDS-APPOINTMENT-LIST',
+      tool: 'export_result(kind=appointment_list, format=pdf) — real chat-only path (see file header, minting is chat-only)',
+      trigger: `${listTrigger} / ${exportTrigger}`,
+      result: downloadUrl && fetchStatus && fetchStatus < 400 ? 'PASS' : 'FAIL',
+      confirmRoundsNeeded,
+      evidence:
+        `download_url_found=${!!downloadUrl} url=${downloadUrl} fetch_status=${fetchStatus}\n\n` +
+        `chat: listReply="${listReply.text}"\nexportReply="${exportReply.text}"`,
+    });
+    expect(downloadUrl, 'the reply must contain a real download link for the appointment_list export').toBeTruthy();
+    expect(fetchStatus && fetchStatus < 400, `the download URL must actually resolve (got status ${fetchStatus})`).toBe(true);
+    await context.close();
+  });
+});
+
+test.describe('EXP-01-KINDS — export a contact_card result (new kind, single-record, 2026-09-14)', () => {
+  test('look up one contact, then export "this card" — a real download URL appears and resolves', async ({
+    browser,
+  }) => {
+    test.setTimeout(180_000);
+    test.skip(process.env.TEST_EXPORT_CAPABILITY_ENABLED !== '1', EXPORT_CAPABILITY_SKIP_REASON);
+    test.skip(!process.env.TEST_CONTACT_ID, 'Set TEST_CONTACT_ID to a real numeric contact_id under this clinic.');
+
+    const context = await browser.newContext({ storageState: 'auth/.storage-state.ob4sa.local.json' });
+    const page = await context.newPage();
+    await gotoAiInstructionStep(page);
+
+    const contactId = process.env.TEST_CONTACT_ID;
+    const getTrigger = `أعطني بطاقة معلومات جهة الاتصال رقم ${contactId}`;
+    const getReply = await sendMessage(page, getTrigger);
+    // contact_card's ONLY allowed format is pdf (export.py's _KIND_ALLOWED_FORMATS) —
+    // deliberately asking for pdf here, not "whatever format", so a wrong-format
+    // rejection can't masquerade as this test's real target (the kind dispatch itself).
+    const exportTrigger = 'صدّري بطاقة جهة الاتصال هذه كملف PDF';
+    const { replies, confirmRoundsNeeded } = await sendAndConfirm(page, exportTrigger);
+    const exportReply = replies[replies.length - 1];
+
+    const urlMatch = exportReply.text.match(/https?:\/\/[^\s)]+/);
+    const downloadUrl = urlMatch ? urlMatch[0].replace(/[).,!?;:]+$/, '') : null;
+
+    let fetchStatus: number | null = null;
+    if (downloadUrl) {
+      const resp = await page.request.get(downloadUrl).catch(() => null);
+      fetchStatus = resp ? resp.status() : null;
+    }
+
+    recorder.record({
+      id: 'EXP-01-KINDS-CONTACT-CARD',
+      tool: 'export_result(kind=contact_card, format=pdf) — real chat-only path, single-record kind',
+      trigger: `${getTrigger} / ${exportTrigger}`,
+      result: downloadUrl && fetchStatus && fetchStatus < 400 ? 'PASS' : 'FAIL',
+      confirmRoundsNeeded,
+      evidence:
+        `contact_id=${contactId} download_url_found=${!!downloadUrl} url=${downloadUrl} fetch_status=${fetchStatus}\n\n` +
+        `chat: getReply="${getReply.text}"\nexportReply="${exportReply.text}"`,
+    });
+    expect(downloadUrl, 'the reply must contain a real download link for the contact_card export').toBeTruthy();
+    expect(fetchStatus && fetchStatus < 400, `the download URL must actually resolve (got status ${fetchStatus})`).toBe(true);
+    await context.close();
+  });
+});
