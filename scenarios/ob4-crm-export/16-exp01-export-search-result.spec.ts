@@ -377,7 +377,12 @@ test.describe('EXP-01-KINDS — export an appointment_list result (new kind, 202
     const listTrigger = 'أرني مواعيد اليوم';
     const listReply = await sendMessage(page, listTrigger);
     const exportTrigger = 'صدّري هذه القائمة كملف PDF';
-    const { replies, confirmRoundsNeeded } = await sendAndConfirm(page, exportTrigger);
+    // Longer reply-wait than sendMessage's 45s default: export_result's outbound
+    // call to Laravel can take up to _EXPORT_HTTP_TIMEOUT_SECONDS=60s on its own
+    // (export.py, raised from 30s 2026-09-15 — PDF rendering intermittently exceeded
+    // the old cap), plus LLM reply generation on top. Without this, sendMessage gives
+    // up early and captures a stale "…" placeholder instead of the real reply.
+    const { replies, confirmRoundsNeeded } = await sendAndConfirm(page, exportTrigger, { timeoutMs: 90_000 });
     const exportReply = replies[replies.length - 1];
 
     const urlMatch = exportReply.text.match(/https?:\/\/[^\s)]+/);

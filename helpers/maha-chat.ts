@@ -235,19 +235,19 @@ export async function sendMessage(page: Page, message: string, timeoutMs = 45_00
 export async function sendAndConfirm(
   page: Page,
   message: string,
-  opts: { confirmPhrase?: string; maxConfirms?: number } = {}
+  opts: { confirmPhrase?: string; maxConfirms?: number; timeoutMs?: number } = {}
 ): Promise<{ replies: MahaReply[]; confirmRoundsNeeded: number }> {
   const confirmPhrase = opts.confirmPhrase ?? process.env.CONFIRM_PHRASE ?? 'نعم';
   const maxConfirms = opts.maxConfirms ?? 4;
 
   const replies: MahaReply[] = [];
-  let reply = await sendMessage(page, message);
+  let reply = await sendMessage(page, message, opts.timeoutMs);
   replies.push(reply);
 
   let rounds = 0;
   while (looksLikeConfirmationPrompt(reply.text) && rounds < maxConfirms) {
     rounds += 1;
-    reply = await sendMessage(page, confirmPhrase);
+    reply = await sendMessage(page, confirmPhrase, opts.timeoutMs);
     replies.push(reply);
   }
 
