@@ -208,9 +208,16 @@ test.describe('TC-DSP01-02 — line chart from the same monthly-trend data', () 
     const page = await context.newPage();
     await gotoAiInstructionStep(page);
 
-    await sendMessage(page, 'أرني اتجاه عدد جهات الاتصال حسب آخر زيارة خلال آخر 6 أشهر');
+    // Was: 'أرني اتجاه عدد جهات الاتصال حسب آخر زيارة خلال آخر 6 أشهر' ("show me the
+    // TREND of contact count..."), which naturally maps to crm_aggregate
+    // (new_contacts_count, group_by=month) — a tool with no set_ref/render_chart
+    // support at all, so Maha correctly refused to chart it (2026-09-15 investigation,
+    // confirmed via crm_aggregate's own docstring in maha_inapp_agent.py). Rephrased to
+    // explicitly search first (crm_search_contacts, mirroring TC-DSP01-01's bar-chart
+    // trigger) so the follow-up "these results" unambiguously has a chartable set_ref.
+    await sendMessage(page, 'أرني جهات الاتصال التي لم يحجزوا موعدًا منذ 2026-06-01');
     const before = await chartCardCount(page);
-    const reply = await sendMessage(page, 'اعرضيها الآن كخط بياني (line chart)');
+    const reply = await sendMessage(page, 'اعرضي هذه النتائج الآن كخط بياني حسب الشهر');
     const after = await chartCardCount(page);
     const cardAppeared = after > before;
     const chartId = cardAppeared ? await latestChartId(page) : null;
@@ -219,7 +226,7 @@ test.describe('TC-DSP01-02 — line chart from the same monthly-trend data', () 
     recorder.record({
       id: 'TC-DSP01-02',
       tool: 'render_chart via real chat (line) — verified via DOM + GET /fo/chart/{id}',
-      trigger: 'اعرضيها الآن كخط بياني (line chart)',
+      trigger: 'اعرضي هذه النتائج الآن كخط بياني حسب الشهر',
       result: cardAppeared && chartData?.success ? 'PASS' : 'FAIL',
       evidence: `reply="${reply.text}"\ncard_appeared=${cardAppeared} chart_id=${chartId} ${JSON.stringify(chartData)}`,
     });

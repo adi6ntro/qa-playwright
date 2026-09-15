@@ -416,8 +416,24 @@ test.describe('EXP-01-KINDS — export a contact_card result (new kind, single-r
     const context = await browser.newContext({ storageState: 'auth/.storage-state.ob4sa.local.json' });
     const page = await context.newPage();
     await gotoAiInstructionStep(page);
+    const clinicId = await page.evaluate(() => (window as any).FO?.clinicId);
 
     const contactId = process.env.TEST_CONTACT_ID;
+    // Probe first and skip cleanly if TEST_CONTACT_ID is currently caught in the
+    // patients:backfill duplicate-phone bug (still open as of 2026-09-11) — same
+    // guard as 08-crm03-update-contact.spec.ts's skipIfContactAmbiguous(), since chat
+    // always carries a real branch_id and crm.py's ambiguous_duplicate_phone fail-safe
+    // correctly refuses a branch-scoped read/write for a contact whose phone number is
+    // shared with other patients rows. Not a regression in export_result or get_contact;
+    // resolving the duplicate (a merge decision) is out of scope for this suite.
+    const probe = await callAction(page, clinicId, 'crm_get_contact', { contact_id: contactId }, { branchId: '1' });
+    test.skip(
+      probe?.data?.error === 'ambiguous_duplicate_phone',
+      `TEST_CONTACT_ID=${contactId}'s phone number is currently shared with another patients row ` +
+        '(patients:backfill duplicate bug, still open as of 2026-09-11) — a branch-scoped read of this contact ' +
+        'is correctly refused until the duplicate is resolved.'
+    );
+
     const getTrigger = `أعطني بطاقة معلومات جهة الاتصال رقم ${contactId}`;
     const getReply = await sendMessage(page, getTrigger);
     // contact_card's ONLY allowed format is pdf (export.py's _KIND_ALLOWED_FORMATS) —
