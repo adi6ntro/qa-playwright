@@ -57,28 +57,25 @@ import '../../helpers/ob4-local-guard'; // throws if BASE_URL isn't local — se
  * fake frozen row, this file reuses the real, already-frozen `QA_SEND_TEST_2NUM`
  * fixture, which happens to already live under this exact clinic.
  *
- * ⚠️ SAME AGENT_EXPORT_SECRET blocker as 30-tpl01-create-template.spec.ts — live-
- * verified via a direct, side-effect-free probe (see below): `stage_template_send`
- * 403s with `{"error":"unauthorized"}` before ever reaching Laravel's real
- * `stageSend()` logic, so `audience_count` cannot be observed in THIS environment
- * as it stands. Unlike TPL-01's happy path, this call has NO real external side
- * effect even once auth passes (`stageSend()` only writes local `user_campaign`/
- * `user_campaign_recipient` rows and re-checks approval status — "creates a draft
- * send... never fires it. There is deliberately NO send tool in the agent's
- * schema", per the dev spec's own AC#1) — so this test IS safe to actually execute
- * against the real endpoint once AGENT_EXPORT_SECRET is set, unlike TPL-01's
- * create-template happy path. It just cannot prove anything beyond "still blocked"
- * in THIS environment as found.
+ * ⚠️ The AGENT_EXPORT_SECRET blocker documented here through 2026-09-14 (same one
+ * as 30-tpl01-create-template.spec.ts's header) was FIXED 2026-09-15 — see that
+ * file's header for the root cause (a `php artisan serve` reload quirk, not just a
+ * missing `.env` line). `stage_template_send` now correctly passes auth. As noted
+ * below, this call has NO real external side effect even once auth passes
+ * (`stageSend()` only writes local `user_campaign`/`user_campaign_recipient` rows
+ * and re-checks approval status — "creates a draft send... never fires it. There
+ * is deliberately NO send tool in the agent's schema", per the dev spec's own
+ * AC#1), so it was always safe to run for real the moment auth worked.
  *
- * Additionally: even once AGENT_EXPORT_SECRET is fixed, a full end-to-end
- * `audience_count` check also needs a real, existing `template_id` row in
- * Laravel's own templates table for `checkApproved()` to look up — this suite has
- * no safe way to mint one (see TPL-01's header) and no confirmed real one is on
- * hand. `TEST_APPROVED_TEMPLATE_ID` is left as an optional env var for whoever
- * has one; without it, the positive assertion is written to run but may still
- * report `template_not_found` rather than a real `audience_count` — that outcome
- * is recorded distinctly from the current `unauthorized` block, not conflated
- * with it.
+ * The remaining piece — a real, existing `template_id` for `checkApproved()` to
+ * look up — turned out not to need TPL-01's happy path at all: `checkApproved()`
+ * only needs Meta to have SOME record of the template (any status counts as
+ * "found"; `awaiting_meta` in the response is what flags non-approved), and clinic
+ * 611 already has several real, APPROVED templates from actual prior product usage,
+ * found via a safe read-only list call (`GET /whatsapp-cloud-templates?user_id=611`
+ * on the `INBOX_API_BASE` proxy) — no new Meta submission needed.
+ * `TEST_APPROVED_TEMPLATE_ID=1592875955551995` (`appointment_reminder_for_next_week_611`)
+ * is now set in `.env` accordingly.
  */
 
 const recorder = new ReportRecorder('OB4 TPL-02 Stage Template Send');

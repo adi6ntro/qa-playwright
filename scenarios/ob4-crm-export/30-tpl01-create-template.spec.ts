@@ -35,29 +35,23 @@ import '../../helpers/ob4-local-guard'; // throws if BASE_URL isn't local — se
  * Capability key is `template_studio` (`capabilities.py:46`), already wildcarded
  * (`"*"`, all clinics) in this checkout's local `reporty-onboard-phase3/config.json`.
  *
- * ⚠️⚠️⚠️ REAL, LIVE-CONFIRMED ENVIRONMENT BLOCKER (2026-09-14) — read before assuming
- * either sub-test below "should" pass:
+ * ⚠️ ENVIRONMENT BLOCKER — FIXED 2026-09-15 (was live 2026-09-14, keeping the history
+ * since TC-TPL01-03 below still probes for this specific class of regression):
  *
- * `reporty-web-backup`'s own `.env` is MISSING `AGENT_EXPORT_SECRET` entirely
- * (confirmed by reading `.env` directly — only present, non-empty, in a stray,
- * NOT-loaded `.env copy` file and in the Python side's `config.json`
- * (`agentExportSecret: "live-test-secret-abc123"`)). `AgentServiceAuth` middleware
- * (`app/Http/Middleware/AgentServiceAuth.php`) fails CLOSED when this is unset —
- * every one of the three `agent/templates/*` routes (`create`, `{id}/status`,
- * `stage-send`) 403s before the controller method's own logic ever runs. Live-
- * verified with a direct, read-only probe (`get_template_status` for a nonexistent
- * id — no side effect, safe to run):
- *   `POST /clinic/611/action {"action":"get_template_status", ...}` →
- *   `{"success": false, "data": {"success": false, "error": "unauthorized"}, "error": "unauthorized"}`
- * This is a Laravel `.env` fix, not a Python or test-suite bug — and it's OUTSIDE
- * this task's permitted touch surface (only `scenarios/ob4-crm-export/`, this
- * repo's own `.env`/`.env.example`/`package.json`, and `reporty-onboard-phase3`'s
- * `config.json` — never `reporty-web-backup`). The fix is one line:
- *   `AGENT_EXPORT_SECRET=live-test-secret-abc123` in `reporty-web-backup/.env`
- * (matching `config.json`'s `agentExportSecret` exactly — the two sides just need
- * to agree).
+ * `reporty-web-backup`'s `.env` was MISSING `AGENT_EXPORT_SECRET` entirely, so
+ * `AgentServiceAuth` middleware failed CLOSED for every `agent/templates/*` route.
+ * Root cause turned out to be one level deeper than "just add the line": the value
+ * WAS added, but `php artisan serve`'s auto-reload-on-.env-change watcher strips any
+ * `.env` variable added after the server's own last boot when respawning its child —
+ * see `reporty-web-backup`'s own commit history / CLAUDE.md for the `--no-reload` fix.
+ * `AGENT_EXPORT_SECRET=live-test-secret-abc123` is now correctly read (matching
+ * `config.json`'s `agentExportSecret`). TC-TPL01-03 below is what caught this fix
+ * landing — its own recorded evidence flagged "no longer unauthorized" and said
+ * TC-TPL02-01 should be revisited; it has been (see 31-tpl02-stage-send.spec.ts —
+ * now a real, verified PASS with an existing approved template, no new Meta
+ * submission needed).
  *
- * SEPARATELY, even once that's fixed: `create_template`'s happy path calls the REAL
+ * `create_template`'s happy path (TC-TPL01-01) still calls the REAL
  * Meta Graph API through `WhatsAppTemplateService` → the remote `INBOX_API_BASE`
  * proxy (`reporty-ai-agent-api-dev.reporty.sa`, NOT a local service) → Meta, using
  * this clinic's real WhatsApp Business Account credentials (`user_clinic_template`
@@ -111,27 +105,25 @@ async function callAction(
 }
 
 test.describe('TC-TPL01-01 — create a real quick_reply template, real template_id/meta_status returned', () => {
-  test('NOT run — see file header for both reasons (AGENT_EXPORT_SECRET missing; real Meta side effect)', async () => {
+  test('NOT run — deliberately gated behind a human go-ahead (real Meta side effect)', async () => {
     recorder.record({
       id: 'TC-TPL01-01',
       tool: 'create_template(interactive.type=quick_reply) — happy path, deliberately not executed',
       trigger: '(not run — see evidence)',
       result: 'UNABLE_TO_TEST',
       evidence:
-        'Two independent, real blockers, both confirmed 2026-09-14: (1) reporty-web-backup\'s .env is missing ' +
-        'AGENT_EXPORT_SECRET, so every agent/templates/* call 403s with {"error":"unauthorized"} before reaching ' +
-        'any real logic — live-verified via a direct get_template_status probe (see file header for the exact ' +
-        'request/response). Fixing this needs a one-line addition to reporty-web-backup/.env ' +
-        '(AGENT_EXPORT_SECRET=live-test-secret-abc123, matching config.json), which is outside this task\'s ' +
-        'permitted file-touch scope (reporty-web-backup was never in the allowed list). (2) Independently of that: ' +
-        'a real create_template call submits a genuine WhatsApp template to Meta\'s Graph API via the remote ' +
+        'The AGENT_EXPORT_SECRET blocker this used to also cite (2026-09-14) was fixed 2026-09-15 — see file ' +
+        'header — so that is no longer a reason to skip this one. The remaining, still-real reason: a real ' +
+        'create_template call submits a genuine WhatsApp template to Meta\'s Graph API via the remote ' +
         'INBOX_API_BASE proxy, using this clinic\'s real WhatsApp Business Account — not something this suite ' +
-        'should do unattended and repeatedly. A manual probe of this exact action during this session\'s own audit ' +
-        'was itself refused by the sandbox\'s "real-world transaction" guard. Both reasons are independent — fixing ' +
-        '(1) alone would not make this safe to auto-run; a human should trigger this specific case manually once ' +
-        'the secret is fixed, then confirm template_id/meta_status by hand.',
+        'should do unattended and repeatedly (rate limits, real template-library pollution, no clean delete path ' +
+        'exercised anywhere in this codebase). A manual probe of this exact action during an earlier session\'s ' +
+        'own audit was itself refused by the sandbox\'s "real-world transaction" guard. A human should trigger ' +
+        'this specific case manually when actually needed, then confirm template_id/meta_status by hand — ' +
+        'TC-TPL02-01 below no longer needs this to run first, since it found existing approved templates already ' +
+        'on this clinic\'s WABA from real prior usage.',
     });
-    test.skip(true, 'deliberately not executed — see recorded evidence for both independent reasons');
+    test.skip(true, 'deliberately gated behind a human go-ahead — see recorded evidence');
   });
 });
 
