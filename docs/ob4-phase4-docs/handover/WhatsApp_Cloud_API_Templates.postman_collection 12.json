@@ -1,0 +1,631 @@
+{
+  "info": {
+    "name": "WhatsApp Cloud API - Templates & Send",
+    "description": "Endpoints for CRUD on WhatsApp message templates, sending template messages, and sending plain text messages via this backend's WhatsApp Cloud API integration. Every request is scoped to a single clinic via user_id - credentials (WABA id, phone_number_id, access token) are looked up per user_id from the users table, not from a shared global config.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:9255",
+      "type": "string"
+    },
+    {
+      "key": "user_id",
+      "value": "15",
+      "type": "string",
+      "description": "The clinic/doctor's user_id. Must have whatsapp_cloud_phone_number_id set in the users table (and ideally whatsapp_cloud_waba_id / whatsapp_cloud_access_token too - see the migration in this project's Downloads folder)."
+    },
+    {
+      "key": "template_id",
+      "value": "",
+      "type": "string",
+      "description": "Fill in with an id returned from 'List Templates', used by Get/Update Template Detail"
+    },
+    {
+      "key": "chat_id",
+      "value": "628385999685",
+      "type": "string",
+      "description": "Patient's WhatsApp number (bare digits, no +). Used by the manual-reply inbox requests below."
+    }
+  ],
+  "item": [
+    {
+      "name": "List Templates",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/whatsapp-cloud-templates?user_id={{user_id}}&limit=100",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "whatsapp-cloud-templates"
+          ],
+          "query": [
+            {
+              "key": "user_id",
+              "value": "{{user_id}}"
+            },
+            {
+              "key": "limit",
+              "value": "100"
+            },
+            {
+              "key": "fields",
+              "value": "",
+              "disabled": true,
+              "description": "e.g. name,status,category,language,components"
+            },
+            {
+              "key": "after",
+              "value": "",
+              "disabled": true,
+              "description": "pagination cursor"
+            }
+          ]
+        },
+        "description": "List all WhatsApp message templates registered on this clinic's WABA. Returns 404 if user_id has no WhatsApp Cloud API credentials registered."
+      },
+      "response": []
+    },
+    {
+      "name": "Upload Template Header Media",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "formdata",
+          "formdata": [
+            {
+              "key": "user_id",
+              "value": "{{user_id}}",
+              "type": "text"
+            },
+            {
+              "key": "file",
+              "type": "file",
+              "src": ""
+            }
+          ]
+        },
+        "url": {
+          "raw": "{{base_url}}/whatsapp-cloud-templates/header-upload",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "whatsapp-cloud-templates",
+            "header-upload"
+          ]
+        },
+        "description": "Uploads an image/video/document to use as a template's HEADER component, and returns a header_handle. Run this BEFORE 'Create Template' whenever the template needs a media header - 'Create Template' only accepts a handle, never raw file bytes.\n\nInternally this is Meta's two-step Resumable Upload API (start a session, then upload the bytes to get back a real handle in the `h` field) - a common mistake is treating the FIRST step's session id as the handle, which it isn't; this endpoint does both steps and only returns the real `h` value.\n\nUse the returned header_handle like this in 'Create Template':\n```\n{\n  \"type\": \"HEADER\",\n  \"format\": \"IMAGE\",\n  \"example\": { \"header_handle\": [\"<header_handle from this response>\"] }\n}\n```\n\nThis calls Meta's Resumable Upload API against Reporty's own App ID (every clinic's WABA is subscribed to the same Reporty App - Partner assignment model, not a separate Meta App per clinic), configured server-side via whatsappCloudAppId - not something the caller passes."
+      },
+      "response": []
+    },
+    {
+      "name": "Create Template",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"user_id\": \"{{user_id}}\",\n  \"name\": \"appointment_reminder\",\n  \"language\": \"id\",\n  \"category\": \"UTILITY\",\n  \"components\": [\n    {\n      \"type\": \"BODY\",\n      \"text\": \"Halo {{1}}, ini pengingat janji temu Anda pada {{2}} pukul {{3}}. Balas pesan ini jika ingin reschedule.\",\n      \"example\": {\n        \"body_text\": [[\"Budi\", \"20 Agustus 2026\", \"10:00\"]]\n      }\n    }\n  ]\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/whatsapp-cloud-templates",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "whatsapp-cloud-templates"
+          ]
+        },
+        "description": "Create a new message template for this clinic's WABA (user_id in body). Meta requires this to be reviewed/approved before it can be used to send messages - status will be PENDING right after creation. Requires this clinic's App to be in Live mode with an approved Business Verification for most categories.\n\nFor a media (image/video/document) HEADER component, run 'Upload Template Header Media' above FIRST and put its header_handle in this component's example.header_handle - see that request's description for the exact shape.\n\nFor a tappable button that opens a website, add a BUTTONS component - see 'Create Template with URL Button' below for the exact shape (static or dynamic link)."
+      },
+      "response": []
+    },
+    {
+      "name": "Create Template with URL Button",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"user_id\": \"{{user_id}}\",\n  \"name\": \"promo_with_link\",\n  \"language\": \"id\",\n  \"category\": \"MARKETING\",\n  \"components\": [\n    {\n      \"type\": \"BODY\",\n      \"text\": \"Halo {{1}}, ada promo spesial buat kamu! Cek detailnya di tombol di bawah ini.\",\n      \"example\": {\n        \"body_text\": [[\"Budi\"]]\n      }\n    },\n    {\n      \"type\": \"BUTTONS\",\n      \"buttons\": [\n        {\n          \"type\": \"URL\",\n          \"text\": \"Lihat Promo\",\n          \"url\": \"https://reporty.sa/promo/{{1}}\",\n          \"example\": [\"summer2026\"]\n        }\n      ]\n    }\n  ]\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/whatsapp-cloud-templates",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "whatsapp-cloud-templates"
+          ]
+        },
+        "description": "Same 'Create Template' endpoint above - this is just a worked example for adding a tappable URL button (opens a website when the patient taps it).\n\nTwo variants:\n- STATIC link (same for every send): omit the `{{1}}` in `url` and the `example` array - just `\"url\": \"https://reporty.sa/promo\"`.\n- DYNAMIC link (this example): `url` ends with a `{{1}}` placeholder, `example` shows Meta what a real value looks like for approval. Meta requires the base domain (\"https://reporty.sa/promo/\") to stay fixed forever - only the part after it can vary per send, and only ONE variable is allowed per URL button.\n\nSee 'Send Template Message with URL Button' below for how to fill in the variable when actually sending this template."
+      },
+      "response": []
+    },
+    {
+      "name": "Delete Template",
+      "request": {
+        "method": "DELETE",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/whatsapp-cloud-templates?user_id={{user_id}}&name=appointment_reminder",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "whatsapp-cloud-templates"
+          ],
+          "query": [
+            {
+              "key": "user_id",
+              "value": "{{user_id}}"
+            },
+            {
+              "key": "name",
+              "value": "appointment_reminder"
+            },
+            {
+              "key": "hsm_id",
+              "value": "",
+              "disabled": true,
+              "description": "optional: delete only one language variant"
+            }
+          ]
+        },
+        "description": "Delete a template by name from this clinic's WABA (deletes all language variants unless hsm_id is also given)."
+      },
+      "response": []
+    },
+    {
+      "name": "Get Template Detail",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/whatsapp-cloud-templates/{{template_id}}?user_id={{user_id}}",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "whatsapp-cloud-templates",
+            "{{template_id}}"
+          ],
+          "query": [
+            {
+              "key": "user_id",
+              "value": "{{user_id}}"
+            }
+          ]
+        },
+        "description": "Fetch one template by its id (from the 'List Templates' response), using this clinic's own access token."
+      },
+      "response": []
+    },
+    {
+      "name": "Update Template",
+      "request": {
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"user_id\": \"{{user_id}}\",\n  \"components\": [\n    {\n      \"type\": \"BODY\",\n      \"text\": \"Halo {{1}}, pengingat: janji temu Anda pada {{2}} pukul {{3}} WIB. Balas untuk reschedule.\",\n      \"example\": {\n        \"body_text\": [[\"Budi\", \"20 Agustus 2026\", \"10:00\"]]\n      }\n    }\n  ]\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/whatsapp-cloud-templates/{{template_id}}",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "whatsapp-cloud-templates",
+            "{{template_id}}"
+          ]
+        },
+        "description": "Update an existing template's components/category for this clinic. Meta only allows this for templates not yet approved, or resets status to PENDING for re-review. Renaming or changing language requires delete + recreate instead."
+      },
+      "response": []
+    },
+    {
+      "name": "Send Template Message",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"user_id\": \"{{user_id}}\",\n  \"to\": \"628385999685\",\n  \"template_name\": \"appointment_reminder\",\n  \"language_code\": \"id\",\n  \"components\": [\n    {\n      \"type\": \"body\",\n      \"parameters\": [\n        { \"type\": \"text\", \"text\": \"Budi\" },\n        { \"type\": \"text\", \"text\": \"20 Agustus 2026\" },\n        { \"type\": \"text\", \"text\": \"10:00\" }\n      ]\n    }\n  ]\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/whatsapp-cloud-send-template",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "whatsapp-cloud-send-template"
+          ]
+        },
+        "description": "Send an approved template message from this clinic's own phone number - the only way to message a patient outside the 24-hour customer-service window. 'components' is optional if the template has no variables.\n\nIf the template has a dynamic URL button (see 'Create Template with URL Button' above), see 'Send Template Message with URL Button' below for how to fill in that button's variable - it's a separate `button` component, not part of `body`."
+      },
+      "response": []
+    },
+    {
+      "name": "Send Template Message with URL Button",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"user_id\": \"{{user_id}}\",\n  \"to\": \"628385999685\",\n  \"template_name\": \"promo_with_link\",\n  \"language_code\": \"id\",\n  \"components\": [\n    {\n      \"type\": \"body\",\n      \"parameters\": [\n        { \"type\": \"text\", \"text\": \"Budi\" }\n      ]\n    },\n    {\n      \"type\": \"button\",\n      \"sub_type\": \"url\",\n      \"index\": \"0\",\n      \"parameters\": [\n        { \"type\": \"text\", \"text\": \"summer2026\" }\n      ]\n    }\n  ]\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/whatsapp-cloud-send-template",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "whatsapp-cloud-send-template"
+          ]
+        },
+        "description": "Sends the 'promo_with_link' template created in 'Create Template with URL Button' above, filling in that button's dynamic part. The patient sees one button ('Lihat Promo') that opens https://reporty.sa/promo/summer2026 when tapped.\n\nKey points:\n- The button component is separate from the body component - both go in the same `components` array.\n- `index`: \"0\" = the first (and here, only) button in the template's BUTTONS list. A template with multiple buttons needs one of these per dynamic button, each with its own index.\n- `sub_type: \"url\"` is required and must match - this is what tells Meta which button this parameter is for.\n- Only send a `button` component for buttons that are actually dynamic. A static URL button (fixed link, no `{{1}}` at creation) needs no button component here at all.\n- The final value people can tap through to is `<base_url_from_template><this_parameter_text>` - here `https://reporty.sa/promo/` + `summer2026`."
+      },
+      "response": []
+    },
+    {
+      "name": "Send Plain Text Message",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"user_id\": \"{{user_id}}\",\n  \"to\": \"628385999685\",\n  \"text\": \"Halo, ini pesan test tanpa template.\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/whatsapp-cloud-send-message",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "whatsapp-cloud-send-message"
+          ]
+        },
+        "description": "Send a plain text message (no template) from this clinic's own phone number - only works within the 24-hour window after the patient's last message, per WhatsApp policy (see is_chat_active in 'List Conversations'). Also records the message into the same GCS chat history the AI agent reads for context, tagged [DOCTOR_MANUAL_REPLY], same as 'Send Manual Reply' below - but unlike that endpoint, does NOT mute the AI agent, so it keeps responding normally afterward. Use this for a one-off send that shouldn't 'take over' the conversation; use 'Send Manual Reply' when staff is taking over."
+      },
+      "response": []
+    },
+    {
+      "name": "List Conversations (Manual Reply Inbox)",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/whatsapp-cloud-conversations?user_id={{user_id}}",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "whatsapp-cloud-conversations"
+          ],
+          "query": [
+            {
+              "key": "user_id",
+              "value": "{{user_id}}"
+            }
+          ]
+        },
+        "description": "List every patient (chat_id) this clinic has a stored conversation with, newest-updated first. Use one of the returned chat_id values with 'Get Chat History' and 'Send Manual Reply' below.\n\nNote: a contact saved via 'Add Contact' below does NOT appear here until an actual message is sent/received with them - this list is purely conversations that have at least one message, not the clinic's full saved-contacts list.\n\nEach conversation includes:\n- is_chat_active (bool): whether WhatsApp's own 24-hour customer service window is still open for this patient (their last inbound message was less than 24h ago). When false, a plain-text send (Send Plain Text Message / Send Manual Reply) will be accepted by Meta but silently fail to deliver (error 131047) - only a template message (Send Template Message) will actually reach them.\n- is_agent_active (bool) / agent_mute_countdown_seconds (int): whether the AI agent is currently muted for this patient because staff sent a manual reply within the last hour, and how many seconds remain before it resumes. false = muted. Frontend can use this to show/auto-clear a \"staff is handling this\" indicator.\n- unread_count (int): how many inbound messages this patient has sent since the last time 'Mark Conversation Read' below was called for them (0 if never unread, or already read). A running counter, not derived from timestamps - cheap to compute even with many conversations. Mark it read once staff opens the conversation (resets to 0); a NEW inbound message after that starts counting up again automatically.\n- IMPORTANT: is_chat_active and is_agent_active are independent - never assume one implies the other. A conversation can be outside the 24h window while the agent is still muted, or inside the window while fully active, in any combination.\n- profile_name: the patient's own WhatsApp display name, auto-captured from the webhook the next time they message in (null until then - cannot be backfilled or looked up on demand).\n- custom_name: staff-edited override, set via 'Set Patient Display Name' below. Takes priority over profile_name when set.\n- display_name: custom_name if set, else profile_name, else null (fall back to the raw chat_id/phone number in the UI).\n- escalated_at (string, ISO datetime, or null): non-null when Maha (the AI agent) has flagged this conversation as needing staff attention - a genuine complaint, a clinical question it wasn't sure how to answer, or an emotional/urgent situation. NOT set for routine appointment notifications (booking confirmed/rescheduled/canceled) - those are FYI only, not a \"needs you\" signal. Maha keeps replying normally even while flagged; this is purely a signal for staff to also look at the thread. Powers the \"Needs You\" tab: show a conversation there when escalated_at != null, sorted by escalated_at ascending (longest waiting first) - use it to compute an amber countdown badge client-side. Cleared automatically the moment staff sends a manual reply in the thread (Send Manual Reply below), or manually via 'Dismiss Escalation' below when no reply is needed.\n- status (\"open\" or \"closed\") / closed_at (ISO datetime or null): staff-controlled - closed via 'Close Conversation' below, reopened via 'Reopen Conversation' or automatically the next time the patient sends a new inbound message. Completes the \"Needs You\" tab predicate together with escalated_at above: show a conversation there only when escalated_at != null AND status != \"closed\"."
+      },
+      "response": []
+    },
+    {
+      "name": "Mark Conversation Read",
+      "request": {
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"user_id\": \"{{user_id}}\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/whatsapp-cloud-conversations/{{chat_id}}/read",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "whatsapp-cloud-conversations",
+            "{{chat_id}}",
+            "read"
+          ]
+        },
+        "description": "Resets unread_count to 0 for this conversation (see 'List Conversations' above). Call this when staff opens a conversation in the inbox UI. New inbound messages from the patient after this start counting up again automatically - no need to call anything to 'unmark' it."
+      },
+      "response": []
+    },
+    {
+      "name": "Dismiss Escalation (Needs You)",
+      "request": {
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n    \"user_id\": \"{{user_id}}\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/whatsapp-cloud-conversations/{{chat_id}}/dismiss-escalation",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "whatsapp-cloud-conversations",
+            "{{chat_id}}",
+            "dismiss-escalation"
+          ]
+        },
+        "description": "Manually clears the \"Needs You\" flag (escalated_at) on a conversation without sending a reply - e.g. staff already resolved it by phone, or judged it a false positive. A real reply sent via 'Send Manual Reply' clears the flag automatically too; use this endpoint only for the no-reply-needed case."
+      },
+      "response": []
+    },
+    {
+      "name": "Close Conversation",
+      "request": {
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n    \"user_id\": \"{{user_id}}\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/whatsapp-cloud-conversations/{{chat_id}}/close",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "whatsapp-cloud-conversations",
+            "{{chat_id}}",
+            "close"
+          ]
+        },
+        "description": "Marks a conversation closed (status: \"closed\"). A closed conversation is excluded from the \"Needs You\" tab even if still flagged (escalated_at set). Automatically reopened the next time the patient sends a new inbound message - staff don't need to remember to reopen it themselves."
+      },
+      "response": []
+    },
+    {
+      "name": "Reopen Conversation",
+      "request": {
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n    \"user_id\": \"{{user_id}}\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/whatsapp-cloud-conversations/{{chat_id}}/reopen",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "whatsapp-cloud-conversations",
+            "{{chat_id}}",
+            "reopen"
+          ]
+        },
+        "description": "Manually reopens a closed conversation (status: \"open\") before the patient has messaged in again."
+      },
+      "response": []
+    },
+    {
+      "name": "Set Patient Display Name",
+      "request": {
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"user_id\": \"{{user_id}}\",\n  \"name\": \"Budi (Rekam Medis)\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/whatsapp-cloud-conversations/{{chat_id}}",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "whatsapp-cloud-conversations",
+            "{{chat_id}}"
+          ]
+        },
+        "description": "Staff-set override for a patient's display name in the manual-reply inbox (e.g. matching the clinic's medical record), for when the WhatsApp-provided profile_name is missing or inaccurate. Takes priority over profile_name in 'List Conversations' above."
+      },
+      "response": []
+    },
+    {
+      "name": "List All Contacts",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/whatsapp-cloud-contacts?user_id={{user_id}}",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "whatsapp-cloud-contacts"
+          ],
+          "query": [
+            {
+              "key": "user_id",
+              "value": "{{user_id}}"
+            }
+          ]
+        },
+        "description": "Every saved contact for this clinic (whatsapp_cloud_patient_profiles), sorted alphabetically by display_name - regardless of whether they have any messages yet. Unlike 'List Conversations' above, this includes contacts added via 'Add Contact' below that have never been messaged. Use this for a contact picker; use 'List Conversations' for the chat inbox.\n\nEach contact includes profile_name / custom_name / display_name / is_chat_active - same meaning as in 'List Conversations' above."
+      },
+      "response": []
+    },
+    {
+      "name": "Add Contact",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"user_id\": \"{{user_id}}\",\n  \"phone_number\": \"{{chat_id}}\",\n  \"name\": \"Budi (Rekam Medis)\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/whatsapp-cloud-contacts",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "whatsapp-cloud-contacts"
+          ]
+        },
+        "description": "Saves a contact (phone number + display name) with no message sent yet - the 'add kontak' counterpart to 'Set Patient Display Name' above, for saving a contact before starting any conversation. Same upsert as that endpoint: calling this again on a number that already has messages just updates its custom_name, no error/duplicate.\n\nIMPORTANT: unlike a real conversation, a contact added here does NOT show up in 'List Conversations' until someone actually sends/receives a message with them - same behavior as a real WhatsApp contact list (saved contact vs. an actual chat thread are different things). Use 'Send Manual Reply' or 'Send Plain Text Message' to start the first message once ready."
+      },
+      "response": []
+    },
+    {
+      "name": "Delete Contact",
+      "request": {
+        "method": "DELETE",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/whatsapp-cloud-contacts?user_id={{user_id}}&phone_number={{chat_id}}",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "whatsapp-cloud-contacts"
+          ],
+          "query": [
+            {
+              "key": "user_id",
+              "value": "{{user_id}}"
+            },
+            {
+              "key": "phone_number",
+              "value": "{{chat_id}}"
+            }
+          ]
+        },
+        "description": "Removes the saved contact (whatsapp_cloud_patient_profiles row only - profile_name/custom_name/last_inbound_at). Returns 404 if no contact row exists for this user_id + phone_number.\n\nIMPORTANT: does NOT delete the actual chat history. If this patient already has messages, they keep showing up in 'List Conversations' as normal - just without a saved name (falls back to the raw phone number), same as deleting a contact in a real WhatsApp app doesn't delete the chat thread you already have with them."
+      },
+      "response": []
+    },
+    {
+      "name": "Get Chat History",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"user_id\": \"{{user_id}}\",\n  \"chat_id\": \"{{chat_id}}\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/get-chat-history",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "get-chat-history"
+          ]
+        },
+        "description": "Last 30 messages of one conversation (role/content/request_time), shared with the WAHA side of the app - not a WhatsApp-Cloud-specific endpoint, reused as-is for the manual-reply inbox's chat view."
+      },
+      "response": []
+    },
+    {
+      "name": "Send Manual Reply",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"user_id\": \"{{user_id}}\",\n  \"to\": \"{{chat_id}}\",\n  \"text\": \"Halo, ini balasan manual dari staff klinik.\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/whatsapp-cloud-manual-reply",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "whatsapp-cloud-manual-reply"
+          ]
+        },
+        "description": "Send a manual reply as clinic staff, unlike 'Send Plain Text Message' above this also (1) mutes the AI agent for this patient for 1 hour (patient_agent_restrictions), so the agent doesn't also reply on top of staff, and (2) records the reply into the same GCS chat history the AI agent reads for context, tagged [DOCTOR_MANUAL_REPLY]."
+      },
+      "response": []
+    }
+  ]
+}
