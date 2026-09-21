@@ -61,6 +61,7 @@
     "test:maha-negative": "playwright test scenarios/maha-instructions/06-negative-tests.spec.ts",
     "test:maha-etm": "playwright test scenarios/maha-instructions/07-expected-text-mismatch.spec.ts",
     "test:ob3-confirm-regression": "BASE_URL=http://localhost:8000 playwright test scenarios/maha-instructions/08-confirm-fabrication-regression.spec.ts",
+    "test:maha-file-upload": "BASE_URL=http://localhost:8000 playwright test scenarios/maha-instructions/09-chat-file-upload.spec.ts",
     "test:maha-all": "playwright test scenarios/maha-instructions/",
     "cleanup:maha-bug005": "playwright test scenarios/maha-instructions/01-cleanup-leftover-markers.spec.ts",
     "cleanup:maha-etm": "playwright test scenarios/maha-instructions/01b-cleanup-etm-marker.spec.ts",

@@ -66,8 +66,19 @@ test('log in and save session state', async ({ page }) => {
 
   // Give the automated path a real chance first (invisible captcha may just
   // pass and the app may redirect straight to the dashboard).
+  //
+  // Bumped from 8_000 to 25_000 (2026-09-21): live-diagnosed via a throwaway
+  // network-logging spec that the invisible reCAPTCHA v2 flow is NOT a single
+  // round trip — clicking submit fires a real sequence of sequential requests
+  // to Google (anchor -> bframe -> reload -> userverify -> clr) before
+  // onCaptchaSuccess() ever fires and the form actually POSTs, even with
+  // Google's official always-pass test site key. Measured this taking close
+  // to (and sometimes over) 8s end-to-end in this harness's headed Chrome,
+  // which made this branch look like "login failed" on runs that would have
+  // succeeded seconds later — the browser was never stuck, just still
+  // mid-flight through reCAPTCHA when the check fired.
   const loggedInWithinTimeout = await page
-    .waitForURL((url) => !url.pathname.startsWith('/login'), { timeout: 8_000 })
+    .waitForURL((url) => !url.pathname.startsWith('/login'), { timeout: 25_000 })
     .then(() => true)
     .catch(() => false);
 

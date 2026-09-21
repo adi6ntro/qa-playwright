@@ -43,6 +43,12 @@ export const SEL = {
   previewBtn: '#fo-ai-preview-btn',
   confirmBar: '#fo-ai-confirm-bar',
   agreeBtn: '#fo-ai-agree-btn',
+  // Chat file-upload button (📎), added alongside the new
+  // /chat/{clinicId}/upload feature — real id confirmed at
+  // step-ai-instruction.blade.php:38, handler foAiHandleChatFileUpload() in
+  // ai-instruction.js. Distinct from the pre-existing 🎤/📄 buttons (audio
+  // transcribe / doc-to-instructions-textarea), which this is NOT testing.
+  fileUploadInput: '#fo-ai-chat-file-upload',
 };
 
 /**
@@ -192,16 +198,14 @@ async function waitForStableText(
  * disabled while the request is in-flight server-side — that was wrong and
  * cost 20-40s of pure dead time per call for no benefit; removed.)
  */
-export async function sendMessage(page: Page, message: string, timeoutMs = 45_000): Promise<MahaReply> {
-  const before = await mahaBubbleCount(page);
-  await page.locator(SEL.chatInput).fill(message);
-  await page.waitForFunction(
-    (sel) => !(document.querySelector(sel) as HTMLButtonElement | null)?.disabled,
-    SEL.sendBtn,
-    { timeout: 10_000 }
-  ).catch(() => {}); // best-effort — if it's disabled for an unrelated reason, let the click below surface that clearly
-  await page.locator(SEL.sendBtn).click();
-
+/**
+ * Shared by sendMessage and sendFileMessage below: once a request has actually
+ * been fired (send-button click, or the file input's onchange handler), wait
+ * for exactly one new, fully-rendered Maha reply bubble to appear and its text
+ * to stop changing (see waitForStableText's doc-comment for why the "stable"
+ * part is needed — replies render progressively).
+ */
+async function waitForNewMahaBubble(page: Page, before: number, timeoutMs: number): Promise<MahaReply> {
   const startWait = Date.now();
   await page.waitForFunction(
     (args) => {
@@ -219,6 +223,73 @@ export async function sendMessage(page: Page, message: string, timeoutMs = 45_00
   const text = await waitForStableText(bubbles.nth(count - 1), { timeoutMs: remainingTimeout });
 
   return { text, bubbleIndex: count - 1 };
+}
+
+export async function sendMessage(page: Page, message: string, timeoutMs = 45_000): Promise<MahaReply> {
+  const before = await mahaBubbleCount(page);
+  await page.locator(SEL.chatInput).fill(message);
+  await page.waitForFunction(
+    (sel) => !(document.querySelector(sel) as HTMLButtonElement | null)?.disabled,
+    SEL.sendBtn,
+    { timeout: 10_000 }
+  ).catch(() => {}); // best-effort — if it's disabled for an unrelated reason, let the click below surface that clearly
+  await page.locator(SEL.sendBtn).click();
+
+  return waitForNewMahaBubble(page, before, timeoutMs);
+}
+
+export interface FileMahaReply extends MahaReply {
+  /** Parsed JSON body of the /chat/{clinicId}/upload response — lets a test
+   * assert on `events` (e.g. a real add_treatment write) mechanically instead
+   * of parsing the rendered bubble text, same PASS/FAIL philosophy the rest
+   * of this suite uses. `null` if the response wasn't valid JSON. */
+  uploadResponse: { reply?: string; events?: unknown[]; demo_mode?: boolean } | null;
+}
+
+/**
+ * Uploads a file through the chat's 📎 button (foAiHandleChatFileUpload() in
+ * ai-instruction.js) and waits for the reply exactly like sendMessage does —
+ * confirmed in the app source that both paths render through the same
+ * _foAiHandleChatReply(). `caption` (optional) is filled into the chat input
+ * first, same as a real user typing a note before attaching a file; the app
+ * reads it from #fo-ai-chat-input at upload time, not as a separate field.
+ *
+ * setInputFiles() fires the <input>'s change event directly, which is exactly
+ * what foAiHandleChatFileUpload() listens for (onchange="...") — no need to
+ * click the 📎 label first to open a native file picker Playwright can't
+ * drive anyway.
+ */
+export async function sendFileMessage(
+  page: Page, filePath: string, caption = '', timeoutMs = 45_000
+): Promise<FileMahaReply> {
+  const before = await mahaBubbleCount(page);
+  if (caption) {
+    await page.locator(SEL.chatInput).fill(caption);
+  }
+
+  // foAiHandleChatFileUpload() (ai-instruction.js) silently no-ops if
+  // #fo-ai-send-btn is still disabled (its own "a request is already in
+  // flight" guard) — same race sendMessage() already guards against below.
+  // On a fresh page load this button starts disabled until
+  // _foAiLoadInstructions() resolves (foAiInstructionInit()) — without this
+  // wait, setInputFiles() below can fire while it's still disabled, and the
+  // upload is dropped with no bubble, no network call, no error at all.
+  await page.waitForFunction(
+    (sel) => !(document.querySelector(sel) as HTMLButtonElement | null)?.disabled,
+    SEL.sendBtn,
+    { timeout: 10_000 }
+  ).catch(() => {});
+
+  const responsePromise = page.waitForResponse(
+    (res) => res.request().method() === 'POST' && /\/fo\/chat\/[^/]+\/upload(\?|$)/.test(res.url()),
+    { timeout: timeoutMs }
+  );
+  await page.locator(SEL.fileUploadInput).setInputFiles(filePath);
+  const response = await responsePromise;
+  const uploadResponse = await response.json().catch(() => null);
+
+  const reply = await waitForNewMahaBubble(page, before, timeoutMs);
+  return { ...reply, uploadResponse };
 }
 
 /**
