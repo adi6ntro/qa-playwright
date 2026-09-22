@@ -1,0 +1,12 @@
+keys:
+  - &adi age1fy9aqsg5gzdtnhhd5qfnywhr6nu8x2wvqnsv8acx4mxf0l78cpms7qp3jy
+
+creation_rules:
+  - path_regex: docs/setup/config_(local|prod)\.json\.enc$
+    age: *adi
+    input_type: json
+    output_type: json
+  - path_regex: docs/web-docs/setup/env.*\.enc$
+    age: *adi
+    input_type: dotenv
+    output_type: dotenv
