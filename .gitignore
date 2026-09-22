@@ -7,3 +7,9 @@ reports/*.md
 playwright-report/
 test-results/
 reports/*.log
+
+# never commit real credentials/DB dumps under docs/
+docs/**/.env*
+docs/**/config_local.json
+docs/**/config_prod.json
+docs/**/*.sql
